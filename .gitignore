@@ -1,0 +1,16 @@
+# Secrets
+.env
+*.p12
+*.jks
+*.keystore
+
+# Data directories
+data/
+
+# SSL certificates
+ssl/
+
+# Editor files
+*.swp
+*~
+.DS_Store

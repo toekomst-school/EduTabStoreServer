@@ -1,0 +1,51 @@
+# EdutabStore F-Droid Repository Configuration
+# Copy this to data/config/config.yml and customize
+
+# Android SDK path (set by Docker)
+sdk_path: /opt/android-sdk
+
+# Repository URL - CHANGE THIS to your actual domain
+repo_url: https://store.edutab.nl/repo
+
+# Repository metadata
+repo_name: EdutabStore
+repo_icon: edutab-icon.png
+repo_description: >
+  Educational apps for tablets. Curated apps for learning and productivity.
+
+# Archive settings (older versions of apps)
+archive_url: https://store.edutab.nl/archive
+archive_name: EdutabStore Archive
+archive_icon: edutab-icon.png
+archive_description: Older versions of apps from the EdutabStore repository.
+archive_older: 3  # Keep 3 older versions in archive
+
+# Keystore configuration
+keystore: /config/keystore.p12
+keystorepass: android
+keypass: android
+repo_keyalias: repokey
+
+# Key distinguished name for generating new keys
+keydname: CN=EdutabStore, OU=F-Droid Repository, O=Edutab, L=Netherlands, C=NL
+
+# Update check ignore (apps to skip update checks for)
+# update_check_ignore:
+#   - com.example.app
+
+# App metadata settings
+update_check_name: EdutabStore
+char_limits:
+  description: 1500
+
+# Build settings
+# build_server_always: false
+# build_server: localhost
+
+# Publish settings
+# make_current_version_link: true
+# current_version_name_source: Name
+
+# Per-app signing keys (optional, for specific apps)
+# keyaliases:
+#   com.example.app: example-key
