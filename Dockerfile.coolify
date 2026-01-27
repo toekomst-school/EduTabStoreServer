@@ -1,0 +1,52 @@
+FROM debian:bookworm-slim
+
+LABEL maintainer="EdutabStore"
+LABEL description="EdutabStore F-Droid Repository Server"
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV ANDROID_HOME=/opt/android-sdk
+ENV PATH="${PATH}:${ANDROID_HOME}/cmdline-tools/latest/bin:${ANDROID_HOME}/platform-tools"
+
+# Install dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    fdroidserver \
+    python3 \
+    python3-pip \
+    openjdk-17-jdk-headless \
+    wget \
+    unzip \
+    nginx \
+    supervisor \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Android SDK command-line tools
+RUN mkdir -p ${ANDROID_HOME}/cmdline-tools && \
+    cd ${ANDROID_HOME}/cmdline-tools && \
+    wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O tools.zip && \
+    unzip -q tools.zip && \
+    rm tools.zip && \
+    mv cmdline-tools latest
+
+# Accept Android SDK licenses
+RUN yes | sdkmanager --licenses && \
+    sdkmanager "platform-tools" "build-tools;34.0.0"
+
+# Create directories
+RUN mkdir -p /data/repo /data/config /data/unsigned /var/log/supervisor
+
+# Copy configuration files
+COPY nginx.coolify.conf /etc/nginx/sites-available/default
+COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+COPY entrypoint.coolify.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+# Copy landing page template
+COPY landing.html /data/landing.html
+
+WORKDIR /data/repo
+
+EXPOSE 80
+
+VOLUME ["/data"]
+
+ENTRYPOINT ["/entrypoint.sh"]
