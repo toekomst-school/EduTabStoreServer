@@ -21,6 +21,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     openssh-client \
     apksigner \
     androguard \
+    nginx \
+    supervisor \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Android SDK command-line tools
@@ -35,22 +37,26 @@ RUN mkdir -p ${ANDROID_HOME}/cmdline-tools && \
 RUN yes | sdkmanager --licenses && \
     sdkmanager "platform-tools" "build-tools;34.0.0"
 
-# Create fdroid user
-RUN useradd -m -s /bin/bash fdroid
+# Create directories
+RUN mkdir -p /data/repo /data/config /data/unsigned /var/log/supervisor && \
+    chown -R www-data:www-data /data
 
-# Create repo directory structure
-RUN mkdir -p /repo /config /unsigned && \
-    chown -R fdroid:fdroid /repo /config /unsigned
-
-# Copy entrypoint script
+# Copy configuration files
+COPY nginx.coolify.conf /etc/nginx/sites-available/default
+COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 COPY entrypoint.sh /entrypoint.sh
+COPY landing.html /data/landing.html
 RUN chmod +x /entrypoint.sh
 
-USER fdroid
-WORKDIR /repo
+# Remove default nginx site
+RUN rm -f /etc/nginx/sites-enabled/default && \
+    ln -s /etc/nginx/sites-available/default /etc/nginx/sites-enabled/default
 
-# Volumes for persistent data
-VOLUME ["/repo", "/config", "/unsigned"]
+WORKDIR /data/repo
+
+EXPOSE 80
+
+VOLUME ["/data"]
 
 ENTRYPOINT ["/entrypoint.sh"]
-CMD ["help"]
+CMD ["serve"]

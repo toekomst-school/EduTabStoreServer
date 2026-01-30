@@ -32,7 +32,11 @@ RUN yes | sdkmanager --licenses && \
     sdkmanager "platform-tools" "build-tools;34.0.0"
 
 # Create directories
-RUN mkdir -p /data/repo /data/config /data/unsigned /var/log/supervisor
+RUN mkdir -p /data/repo /data/config /data/unsigned /data/virustotal /var/log/supervisor
+
+# Copy admin API and install dependencies
+COPY admin /opt/admin
+RUN pip3 install --no-cache-dir --break-system-packages -r /opt/admin/requirements.txt
 
 # Copy configuration files
 COPY nginx.coolify.conf /etc/nginx/sites-available/default
