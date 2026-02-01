@@ -5,6 +5,13 @@ REPO_DIR="/data/repo"
 CONFIG_DIR="/data/config"
 UNSIGNED_DIR="/data/unsigned"
 
+# Environment variables with defaults
+REPO_NAME="${REPO_NAME:-EdutabStore}"
+REPO_DESCRIPTION="${REPO_DESCRIPTION:-Educational apps for tablets}"
+REPO_URL="${REPO_URL:-https://store.edutab.nl/repo}"
+ARCHIVE_NAME="${ARCHIVE_NAME:-${REPO_NAME} Archive}"
+ARCHIVE_DESCRIPTION="${ARCHIVE_DESCRIPTION:-Older versions of ${REPO_NAME} apps}"
+
 echo "=== EdutabStore Server Starting ==="
 
 # Create directories if they don't exist
@@ -25,10 +32,6 @@ if [ ! -f "$CONFIG_DIR/config.yml" ]; then
     # Update config with correct paths
     sed -i "s|keystore:.*|keystore: $CONFIG_DIR/keystore.p12|" "$CONFIG_DIR/config.yml"
 
-    # Set repo URL from environment or default
-    REPO_URL="${REPO_URL:-https://store.edutab.nl/repo}"
-    sed -i "s|repo_url:.*|repo_url: $REPO_URL|" "$CONFIG_DIR/config.yml"
-
     echo "Repository initialized!"
     echo ""
     echo "=== IMPORTANT: Save your keystore! ==="
@@ -38,6 +41,20 @@ fi
 
 # Create symlink to config
 ln -sf "$CONFIG_DIR/config.yml" "$REPO_DIR/config.yml"
+
+# Always apply environment config on startup
+echo "Applying environment config..."
+sed -i "s|^\s*repo_name:.*|repo_name: $REPO_NAME|" "$CONFIG_DIR/config.yml"
+sed -i "s|^\s*repo_description:.*|repo_description: $REPO_DESCRIPTION|" "$CONFIG_DIR/config.yml"
+sed -i "s|^\s*repo_url:.*|repo_url: $REPO_URL|" "$CONFIG_DIR/config.yml"
+sed -i "s|^\s*archive_name:.*|archive_name: $ARCHIVE_NAME|" "$CONFIG_DIR/config.yml"
+sed -i "s|^\s*archive_description:.*|archive_description: $ARCHIVE_DESCRIPTION|" "$CONFIG_DIR/config.yml"
+echo "Config: repo_name=$REPO_NAME, repo_url=$REPO_URL"
+
+# Rebuild index with updated config
+echo "Rebuilding repository index..."
+cd "$REPO_DIR"
+fdroid update --create-metadata 2>&1 || echo "Note: fdroid update returned non-zero (may be empty repo)"
 
 # Copy landing page if repo is empty
 if [ ! -f "$REPO_DIR/repo/index.html" ] && [ -f "/data/landing.html" ]; then

@@ -15,12 +15,22 @@ ARCHIVE_DESCRIPTION="${ARCHIVE_DESCRIPTION:-Older versions of ${REPO_NAME} apps}
 apply_env_config() {
     if [ -f "$CONFIG_FILE" ]; then
         echo "Applying environment config..."
-        sed -i "s|^repo_name: .*|repo_name: ${REPO_NAME}|" "$CONFIG_FILE"
-        sed -i "s|^repo_description: .*|repo_description: ${REPO_DESCRIPTION}|" "$CONFIG_FILE"
-        sed -i "s|^repo_url: .*|repo_url: ${REPO_URL}|" "$CONFIG_FILE"
-        sed -i "s|^archive_name: .*|archive_name: ${ARCHIVE_NAME}|" "$CONFIG_FILE"
-        sed -i "s|^archive_description: .*|archive_description: ${ARCHIVE_DESCRIPTION}|" "$CONFIG_FILE"
-        echo "Config updated from environment variables"
+        # Use flexible patterns (with or without quotes, any whitespace)
+        sed -i "s|^\s*repo_name:.*|repo_name: ${REPO_NAME}|" "$CONFIG_FILE"
+        sed -i "s|^\s*repo_description:.*|repo_description: ${REPO_DESCRIPTION}|" "$CONFIG_FILE"
+        sed -i "s|^\s*repo_url:.*|repo_url: ${REPO_URL}|" "$CONFIG_FILE"
+        sed -i "s|^\s*archive_name:.*|archive_name: ${ARCHIVE_NAME}|" "$CONFIG_FILE"
+        sed -i "s|^\s*archive_description:.*|archive_description: ${ARCHIVE_DESCRIPTION}|" "$CONFIG_FILE"
+
+        # Show current config values
+        echo "Config values:"
+        grep -E "^repo_(name|url|description):" "$CONFIG_FILE" || true
+
+        # Trigger index rebuild
+        echo "Rebuilding repository index..."
+        cd "$REPO_DIR"
+        fdroid update --create-metadata 2>&1 || echo "Warning: fdroid update failed, may need manual intervention"
+        echo "Config applied and index rebuilt"
     fi
 }
 
