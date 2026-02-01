@@ -4,6 +4,26 @@ set -e
 CONFIG_FILE="/config/config.yml"
 REPO_DIR="/repo"
 
+# Environment variables with defaults
+REPO_NAME="${REPO_NAME:-EdutabStore}"
+REPO_DESCRIPTION="${REPO_DESCRIPTION:-Educational apps for tablets}"
+REPO_URL="${REPO_URL:-https://store.edutab.nl/repo}"
+ARCHIVE_NAME="${ARCHIVE_NAME:-${REPO_NAME} Archive}"
+ARCHIVE_DESCRIPTION="${ARCHIVE_DESCRIPTION:-Older versions of ${REPO_NAME} apps}"
+
+# Apply environment variables to config
+apply_env_config() {
+    if [ -f "$CONFIG_FILE" ]; then
+        echo "Applying environment config..."
+        sed -i "s|^repo_name: .*|repo_name: ${REPO_NAME}|" "$CONFIG_FILE"
+        sed -i "s|^repo_description: .*|repo_description: ${REPO_DESCRIPTION}|" "$CONFIG_FILE"
+        sed -i "s|^repo_url: .*|repo_url: ${REPO_URL}|" "$CONFIG_FILE"
+        sed -i "s|^archive_name: .*|archive_name: ${ARCHIVE_NAME}|" "$CONFIG_FILE"
+        sed -i "s|^archive_description: .*|archive_description: ${ARCHIVE_DESCRIPTION}|" "$CONFIG_FILE"
+        echo "Config updated from environment variables"
+    fi
+}
+
 # Initialize repo if not already done
 init_repo() {
     if [ ! -f "$REPO_DIR/config.yml" ] && [ ! -L "$REPO_DIR/config.yml" ]; then
@@ -21,13 +41,6 @@ init_repo() {
             mv "$REPO_DIR/config.yml" "$CONFIG_FILE"
             ln -s "$CONFIG_FILE" "$REPO_DIR/config.yml"
             echo "Config moved to /config/config.yml"
-
-            # Set proper defaults for EdutabStore
-            sed -i 's/repo_name: .*/repo_name: EdutabStore/' "$CONFIG_FILE"
-            sed -i 's/repo_description: .*/repo_description: Educational apps for tablets/' "$CONFIG_FILE"
-            sed -i 's/archive_name: .*/archive_name: EdutabStore Archive/' "$CONFIG_FILE"
-            sed -i 's/archive_description: .*/archive_description: Older versions of EdutabStore apps/' "$CONFIG_FILE"
-            echo "Set EdutabStore defaults in config"
         fi
 
         # Move keystore to config volume if generated
@@ -45,6 +58,9 @@ init_repo() {
             ln -s "$CONFIG_FILE" "$REPO_DIR/config.yml"
         fi
     fi
+
+    # Always apply env config on startup
+    apply_env_config
 }
 
 # Update repository index
@@ -137,6 +153,11 @@ print_help() {
 }
 
 case "$1" in
+    serve)
+        init_repo
+        echo "Starting supervisord (nginx + admin API)..."
+        exec /usr/bin/supervisord -c /etc/supervisor/conf.d/supervisord.conf
+        ;;
     init)
         init_repo
         ;;
