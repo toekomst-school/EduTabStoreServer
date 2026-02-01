@@ -794,190 +794,64 @@ GOOGLE_PLAY_PASSWORD = os.environ.get("GOOGLE_PLAY_PASSWORD", "")
 DOWNLOADS_DIR = "/data/downloads"
 
 
+def download_apk_with_apkeep(package_name, source="apk-pure"):
+    """
+    Download APK using apkeep CLI tool.
+    Sources: apk-pure, google-play, f-droid, huawei-app-gallery
+    Returns (filepath, error_message)
+    """
+    try:
+        import subprocess
+        import glob
+
+        os.makedirs(DOWNLOADS_DIR, exist_ok=True)
+
+        # Build apkeep command
+        cmd = ["apkeep", "-a", package_name, "-d", source, DOWNLOADS_DIR]
+
+        # Run apkeep
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=300
+        )
+
+        if result.returncode != 0:
+            error_msg = result.stderr.strip() or result.stdout.strip() or "Unknown error"
+            return None, f"apkeep ({source}) failed: {error_msg}"
+
+        # Find the downloaded APK (apkeep names files as package_version.apk)
+        pattern = os.path.join(DOWNLOADS_DIR, f"{package_name}*.apk")
+        apk_files = glob.glob(pattern)
+
+        if not apk_files:
+            return None, f"apkeep completed but no APK found for {package_name}"
+
+        # Return the most recently modified file
+        latest_apk = max(apk_files, key=os.path.getmtime)
+        return latest_apk, None
+
+    except subprocess.TimeoutExpired:
+        return None, f"apkeep ({source}) timed out after 5 minutes"
+    except Exception as e:
+        return None, f"apkeep ({source}) error: {str(e)}"
+
+
 def download_from_google_play(package_name):
     """
-    Download APK from Google Play Store using gpapi.
+    Download APK from Google Play Store using apkeep.
     Returns (filepath, error_message)
     """
-    if not GOOGLE_PLAY_EMAIL or not GOOGLE_PLAY_PASSWORD:
-        return None, "Google Play credentials not configured"
-
-    try:
-        from gpapi.googleplay import GooglePlayAPI
-
-        os.makedirs(DOWNLOADS_DIR, exist_ok=True)
-
-        # Initialize API
-        api = GooglePlayAPI(locale="en_US", timezone="UTC")
-
-        # Login
-        api.login(GOOGLE_PLAY_EMAIL, GOOGLE_PLAY_PASSWORD)
-
-        # Get app details first
-        details = api.details(package_name)
-        if not details:
-            return None, f"App {package_name} not found on Google Play"
-
-        version_code = details.get("versionCode")
-        offer_type = details.get("offer", [{}])[0].get("offerType", 1)
-
-        # Download APK
-        download = api.download(package_name, versionCode=version_code, offerType=offer_type)
-
-        filename = f"{package_name}_{version_code}.apk"
-        filepath = os.path.join(DOWNLOADS_DIR, filename)
-
-        with open(filepath, "wb") as f:
-            for chunk in download.get("file", {}).get("data", b""):
-                f.write(chunk)
-
-        return filepath, None
-
-    except Exception as e:
-        return None, f"Google Play download failed: {str(e)}"
-
-
-def download_from_apkcombo(package_name):
-    """
-    Download APK from APKCombo as fallback.
-    Returns (filepath, error_message)
-    """
-    try:
-        from bs4 import BeautifulSoup
-
-        os.makedirs(DOWNLOADS_DIR, exist_ok=True)
-
-        # Use a session to maintain cookies
-        session = requests.Session()
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.9",
-            "Accept-Encoding": "gzip, deflate, br",
-            "Connection": "keep-alive",
-            "Upgrade-Insecure-Requests": "1",
-        }
-        session.headers.update(headers)
-
-        # First visit the homepage to get cookies
-        session.get("https://apkcombo.com/", timeout=30)
-
-        # Search for the app
-        search_url = f"https://apkcombo.com/search/{package_name}"
-        response = session.get(search_url, timeout=30)
-        if response.status_code != 200:
-            return None, f"APKCombo search failed: {response.status_code}"
-
-        soup = BeautifulSoup(response.text, "html.parser")
-
-        # Find app link - APKCombo uses /app-name/package.name/ pattern
-        app_link = None
-        for link in soup.select(f'a[href*="/{package_name}/"]'):
-            href = link.get("href", "")
-            if package_name in href:
-                app_link = href
-                break
-
-        if not app_link:
-            return None, f"App {package_name} not found on APKCombo"
-
-        # Get the app page
-        if not app_link.startswith("http"):
-            app_link = f"https://apkcombo.com{app_link}"
-
-        response = session.get(app_link, timeout=30)
-        if response.status_code != 200:
-            return None, f"APKCombo app page failed: {response.status_code}"
-
-        soup = BeautifulSoup(response.text, "html.parser")
-
-        # Find download link - look for APK download button
-        download_link = None
-        for link in soup.select('a[href*="/download/"]'):
-            href = link.get("href", "")
-            if "/download/" in href and "apk" in href.lower():
-                download_link = href
-                break
-
-        # Alternative: look for direct download button
-        if not download_link:
-            download_btn = soup.select_one('a.variant[href*="download"]')
-            if download_btn:
-                download_link = download_btn.get("href")
-
-        if not download_link:
-            return None, f"Could not find download link on APKCombo. Manual: {app_link}"
-
-        if not download_link.startswith("http"):
-            download_link = f"https://apkcombo.com{download_link}"
-
-        # Get the download page (may have another redirect)
-        response = session.get(download_link, timeout=30)
-        if response.status_code != 200:
-            return None, f"APKCombo download page failed: {response.status_code}"
-
-        # Check if this is the actual APK or another page
-        content_type = response.headers.get("content-type", "")
-        if "application" in content_type and "html" not in content_type:
-            # Direct download
-            apk_content = response.content
-        else:
-            # Parse for final download link
-            soup = BeautifulSoup(response.text, "html.parser")
-            final_link = None
-            for link in soup.select('a[href*=".apk"]'):
-                href = link.get("href", "")
-                if ".apk" in href:
-                    final_link = href
-                    break
-
-            if not final_link:
-                return None, f"Could not find final APK link. Manual: {app_link}"
-
-            if not final_link.startswith("http"):
-                final_link = f"https://apkcombo.com{final_link}"
-
-            apk_response = session.get(final_link, timeout=300, stream=True)
-            if apk_response.status_code != 200:
-                return None, f"APK download failed: {apk_response.status_code}"
-
-            # Save the APK
-            timestamp = int(time.time())
-            filename = f"{package_name}_{timestamp}.apk"
-            filepath = os.path.join(DOWNLOADS_DIR, filename)
-
-            with open(filepath, "wb") as f:
-                for chunk in apk_response.iter_content(chunk_size=8192):
-                    f.write(chunk)
-
-            return filepath, None
-
-        # Save direct download
-        timestamp = int(time.time())
-        filename = f"{package_name}_{timestamp}.apk"
-        filepath = os.path.join(DOWNLOADS_DIR, filename)
-
-        with open(filepath, "wb") as f:
-            f.write(apk_content)
-
-        return filepath, None
-
-    except Exception as e:
-        return None, f"APKCombo download failed: {str(e)}"
+    return download_apk_with_apkeep(package_name, "google-play")
 
 
 def download_from_apkpure(package_name):
     """
-    Download APK from APKPure or APKCombo as fallback.
+    Download APK from APKPure using apkeep.
     Returns (filepath, error_message)
     """
-    # Try APKCombo first (APKPure has stricter bot detection)
-    filepath, error = download_from_apkcombo(package_name)
-    if filepath:
-        return filepath, None
-
-    # Return helpful message with manual download options
-    return None, f"Automated download failed ({error}). Manual options: https://apkcombo.com/search/{package_name} or https://apkpure.com/search?q={package_name}"
+    return download_apk_with_apkeep(package_name, "apk-pure")
 
 
 def import_apk_to_repo(apk_path, scan_virustotal=True):

@@ -37,6 +37,10 @@ RUN mkdir -p ${ANDROID_HOME}/cmdline-tools && \
 RUN yes | sdkmanager --licenses && \
     sdkmanager "platform-tools" "build-tools;34.0.0"
 
+# Install apkeep for APK downloads
+RUN wget -q https://github.com/EFForg/apkeep/releases/download/0.18.0/apkeep-x86_64-unknown-linux-gnu -O /usr/local/bin/apkeep && \
+    chmod +x /usr/local/bin/apkeep
+
 # Create directories
 RUN mkdir -p /data/repo /data/config /data/unsigned /var/log/supervisor && \
     chown -R www-data:www-data /data
