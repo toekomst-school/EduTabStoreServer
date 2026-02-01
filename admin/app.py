@@ -839,121 +839,35 @@ def download_from_google_play(package_name):
 
 def download_from_apkpure(package_name):
     """
-    Download APK from APKPure as fallback.
+    Download APK from APKPure as fallback using apkpure library.
     Returns (filepath, error_message)
     """
     try:
-        from bs4 import BeautifulSoup
+        from apkpure.apkpure import ApkPure
+        import json
 
         os.makedirs(DOWNLOADS_DIR, exist_ok=True)
 
-        # Get app page
-        app_url = f"https://apkpure.com/search?q={package_name}"
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.9",
-            "Accept-Encoding": "gzip, deflate, br",
-            "DNT": "1",
-            "Connection": "keep-alive",
-            "Upgrade-Insecure-Requests": "1",
-            "Sec-Fetch-Dest": "document",
-            "Sec-Fetch-Mode": "navigate",
-            "Sec-Fetch-Site": "none",
-            "Sec-Fetch-User": "?1",
-            "Cache-Control": "max-age=0"
-        }
+        api = ApkPure()
 
-        # Search for the app
-        response = requests.get(app_url, headers=headers, timeout=30)
-        if response.status_code != 200:
-            return None, f"APKPure search failed: {response.status_code}"
-
-        soup = BeautifulSoup(response.text, "html.parser")
-
-        # Find the app link
-        app_link = None
-        for link in soup.select("a.first-info"):
-            href = link.get("href", "")
-            if package_name in href:
-                app_link = href
-                break
-
-        if not app_link:
-            # Try alternative selector
-            for link in soup.select("a[href*='" + package_name + "']"):
-                href = link.get("href", "")
-                if "/download" not in href and package_name in href:
-                    app_link = href
-                    break
-
-        if not app_link:
+        # Search for the app by package name
+        result = api.search_top(package_name)
+        if not result:
             return None, f"App {package_name} not found on APKPure"
 
-        # Get the download page
-        if not app_link.startswith("http"):
-            app_link = f"https://apkpure.com{app_link}"
+        # Parse search result
+        result_data = json.loads(result) if isinstance(result, str) else result
 
-        download_page_url = f"{app_link}/download"
-        response = requests.get(download_page_url, headers=headers, timeout=30)
-        if response.status_code != 200:
-            return None, f"APKPure download page failed: {response.status_code}"
+        # Get the app identifier (could be app name or slug)
+        app_id = result_data.get("id") or result_data.get("name") or package_name
 
-        soup = BeautifulSoup(response.text, "html.parser")
+        # Download to our downloads directory
+        filepath = api.download(app_id, path=DOWNLOADS_DIR)
 
-        # Find download link - APKPure uses d.apkpure.com/b/APK/ pattern
-        download_link = None
-
-        # Look for the direct APK download link (d.apkpure.com/b/APK/package)
-        for link in soup.select("a[href*='d.apkpure.com/b/APK/']"):
-            href = link.get("href", "")
-            if package_name in href:
-                download_link = href
-                break
-
-        # Fallback: look for any d.apkpure.com APK link
-        if not download_link:
-            for link in soup.select("a[href*='d.apkpure.com']"):
-                href = link.get("href", "")
-                if "/APK/" in href:
-                    download_link = href
-                    break
-
-        # Legacy fallback: look for .apk links
-        if not download_link:
-            for link in soup.select("a[href*='.apk']"):
-                href = link.get("href", "")
-                if ".apk" in href and "download" in href.lower():
-                    download_link = href
-                    break
-
-        # Alternative: look for download button
-        if not download_link:
-            download_btn = soup.select_one("a.download-start-btn")
-            if download_btn:
-                download_link = download_btn.get("href")
-
-        if not download_link:
-            return None, "Could not find APK download link on APKPure"
-
-        # Download the APK
-        if not download_link.startswith("http"):
-            download_link = f"https://apkpure.com{download_link}"
-
-        apk_response = requests.get(download_link, headers=headers, timeout=300, stream=True)
-        if apk_response.status_code != 200:
-            return None, f"APK download failed: {apk_response.status_code}"
-
-        # Generate filename
-        timestamp = int(time.time())
-        filename = f"{package_name}_{timestamp}.apk"
-        filepath = os.path.join(DOWNLOADS_DIR, filename)
-
-        with open(filepath, "wb") as f:
-            for chunk in apk_response.iter_content(chunk_size=8192):
-                f.write(chunk)
-
-        return filepath, None
+        if filepath and os.path.exists(filepath):
+            return filepath, None
+        else:
+            return None, "APKPure download completed but file not found"
 
     except Exception as e:
         return None, f"APKPure download failed: {str(e)}"
