@@ -611,6 +611,39 @@ def api_upload_screenshot(package):
     })
 
 
+@app.route("/api/apps/<package>/screenshots/<filename>", methods=["DELETE"])
+@require_api_key
+def api_delete_screenshot(package, filename):
+    """Delete a screenshot for an app"""
+    # Verify app exists
+    info = get_app_info(package)
+    if not info:
+        return jsonify({"error": "App not found"}), 404
+
+    # Sanitize filename to prevent directory traversal
+    filename = secure_filename(filename)
+
+    # Build path to screenshot
+    screenshot_path = os.path.join(
+        METADATA_DIR, package, "en-US", "images", "phoneScreenshots", filename
+    )
+
+    if not os.path.exists(screenshot_path):
+        return jsonify({"error": "Screenshot not found"}), 404
+
+    # Delete the file
+    os.remove(screenshot_path)
+
+    # Run fdroid update
+    success, output = run_fdroid_update()
+
+    return jsonify({
+        "success": True,
+        "deleted": filename,
+        "fdroid_update": success
+    })
+
+
 @app.route("/api/update", methods=["POST"])
 @require_api_key
 def api_force_update():
@@ -750,6 +783,317 @@ def api_check_virustotal_analysis(analysis_id):
 def api_health():
     """Health check endpoint (no auth required)"""
     return jsonify({"status": "ok"})
+
+
+# =============================================================================
+# Google Play / APKPure Import
+# =============================================================================
+
+GOOGLE_PLAY_EMAIL = os.environ.get("GOOGLE_PLAY_EMAIL", "")
+GOOGLE_PLAY_PASSWORD = os.environ.get("GOOGLE_PLAY_PASSWORD", "")
+DOWNLOADS_DIR = "/data/downloads"
+
+
+def download_from_google_play(package_name):
+    """
+    Download APK from Google Play Store using gpapi.
+    Returns (filepath, error_message)
+    """
+    if not GOOGLE_PLAY_EMAIL or not GOOGLE_PLAY_PASSWORD:
+        return None, "Google Play credentials not configured"
+
+    try:
+        from gpapi.googleplay import GooglePlayAPI
+
+        os.makedirs(DOWNLOADS_DIR, exist_ok=True)
+
+        # Initialize API
+        api = GooglePlayAPI(locale="en_US", timezone="UTC")
+
+        # Login
+        api.login(GOOGLE_PLAY_EMAIL, GOOGLE_PLAY_PASSWORD)
+
+        # Get app details first
+        details = api.details(package_name)
+        if not details:
+            return None, f"App {package_name} not found on Google Play"
+
+        version_code = details.get("versionCode")
+        offer_type = details.get("offer", [{}])[0].get("offerType", 1)
+
+        # Download APK
+        download = api.download(package_name, versionCode=version_code, offerType=offer_type)
+
+        filename = f"{package_name}_{version_code}.apk"
+        filepath = os.path.join(DOWNLOADS_DIR, filename)
+
+        with open(filepath, "wb") as f:
+            for chunk in download.get("file", {}).get("data", b""):
+                f.write(chunk)
+
+        return filepath, None
+
+    except Exception as e:
+        return None, f"Google Play download failed: {str(e)}"
+
+
+def download_from_apkpure(package_name):
+    """
+    Download APK from APKPure as fallback.
+    Returns (filepath, error_message)
+    """
+    try:
+        from bs4 import BeautifulSoup
+
+        os.makedirs(DOWNLOADS_DIR, exist_ok=True)
+
+        # Get app page
+        app_url = f"https://apkpure.com/search?q={package_name}"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        }
+
+        # Search for the app
+        response = requests.get(app_url, headers=headers, timeout=30)
+        if response.status_code != 200:
+            return None, f"APKPure search failed: {response.status_code}"
+
+        soup = BeautifulSoup(response.text, "html.parser")
+
+        # Find the app link
+        app_link = None
+        for link in soup.select("a.first-info"):
+            href = link.get("href", "")
+            if package_name in href:
+                app_link = href
+                break
+
+        if not app_link:
+            # Try alternative selector
+            for link in soup.select("a[href*='" + package_name + "']"):
+                href = link.get("href", "")
+                if "/download" not in href and package_name in href:
+                    app_link = href
+                    break
+
+        if not app_link:
+            return None, f"App {package_name} not found on APKPure"
+
+        # Get the download page
+        if not app_link.startswith("http"):
+            app_link = f"https://apkpure.com{app_link}"
+
+        download_page_url = f"{app_link}/download"
+        response = requests.get(download_page_url, headers=headers, timeout=30)
+        if response.status_code != 200:
+            return None, f"APKPure download page failed: {response.status_code}"
+
+        soup = BeautifulSoup(response.text, "html.parser")
+
+        # Find download link
+        download_link = None
+        for link in soup.select("a[href*='.apk']"):
+            href = link.get("href", "")
+            if ".apk" in href and "download" in href.lower():
+                download_link = href
+                break
+
+        # Alternative: look for download button
+        if not download_link:
+            download_btn = soup.select_one("a.download-start-btn")
+            if download_btn:
+                download_link = download_btn.get("href")
+
+        if not download_link:
+            return None, "Could not find APK download link on APKPure"
+
+        # Download the APK
+        if not download_link.startswith("http"):
+            download_link = f"https://apkpure.com{download_link}"
+
+        apk_response = requests.get(download_link, headers=headers, timeout=300, stream=True)
+        if apk_response.status_code != 200:
+            return None, f"APK download failed: {apk_response.status_code}"
+
+        # Generate filename
+        timestamp = int(time.time())
+        filename = f"{package_name}_{timestamp}.apk"
+        filepath = os.path.join(DOWNLOADS_DIR, filename)
+
+        with open(filepath, "wb") as f:
+            for chunk in apk_response.iter_content(chunk_size=8192):
+                f.write(chunk)
+
+        return filepath, None
+
+    except Exception as e:
+        return None, f"APKPure download failed: {str(e)}"
+
+
+def import_apk_to_repo(apk_path, scan_virustotal=True):
+    """
+    Import a downloaded APK into the F-Droid repository.
+    Returns response dict with status.
+    """
+    # Get package name from APK
+    package = get_package_from_apk(apk_path)
+    if not package:
+        os.remove(apk_path)
+        return {"success": False, "error": "Could not read package info from APK"}
+
+    # Calculate SHA256
+    sha256 = get_file_sha256(apk_path)
+
+    # Move to repo
+    filename = os.path.basename(apk_path)
+    dest_path = os.path.join(REPO_DIR, filename)
+    shutil.move(apk_path, dest_path)
+
+    # Run fdroid update
+    fdroid_success, fdroid_output = run_fdroid_update()
+
+    response_data = {
+        "success": True,
+        "package": package,
+        "filename": filename,
+        "sha256": sha256,
+        "fdroid_update": fdroid_success,
+        "output": fdroid_output if not fdroid_success else "Repository updated"
+    }
+
+    # VirusTotal scan
+    if scan_virustotal and VIRUSTOTAL_API_KEY:
+        # Check if already scanned
+        vt_report, _ = virustotal_get_file_report(sha256)
+        if vt_report:
+            save_virustotal_result(package, sha256, vt_report)
+            stats = extract_virustotal_stats(vt_report)
+            response_data["virustotal"] = {
+                "status": "completed",
+                "sha256": sha256,
+                "stats": stats,
+                "message": "File already in VirusTotal database"
+            }
+        else:
+            # Upload for scanning
+            analysis_id, upload_error = virustotal_upload_file(dest_path)
+            if analysis_id:
+                response_data["virustotal"] = {
+                    "status": "pending",
+                    "analysis_id": analysis_id,
+                    "sha256": sha256,
+                    "message": "Scan initiated, check status with /api/apps/{package}/virustotal"
+                }
+            else:
+                response_data["virustotal"] = {
+                    "status": "error",
+                    "error": upload_error
+                }
+    elif not VIRUSTOTAL_API_KEY:
+        response_data["virustotal"] = {
+            "status": "skipped",
+            "message": "VIRUSTOTAL_API_KEY not configured"
+        }
+
+    return response_data
+
+
+@app.route("/api/import/playstore", methods=["POST"])
+@require_api_key
+def api_import_from_playstore():
+    """
+    Import an app from Google Play Store (with APKPure fallback).
+    Automatically scans with VirusTotal.
+
+    Request body:
+    {
+        "package": "com.example.app",
+        "scan": true  // optional, default true
+    }
+    """
+    data = request.get_json()
+    if not data or "package" not in data:
+        return jsonify({"error": "Package name required"}), 400
+
+    package_name = data["package"].strip()
+    scan_virustotal = data.get("scan", True)
+
+    # Validate package name format
+    if not package_name or "." not in package_name:
+        return jsonify({"error": "Invalid package name format"}), 400
+
+    # Try Google Play first
+    filepath, gplay_error = download_from_google_play(package_name)
+
+    source = "google_play"
+    fallback_error = None
+
+    # Fallback to APKPure
+    if not filepath:
+        fallback_error = gplay_error
+        filepath, apkpure_error = download_from_apkpure(package_name)
+        source = "apkpure"
+
+        if not filepath:
+            return jsonify({
+                "error": "Download failed from all sources",
+                "google_play_error": gplay_error,
+                "apkpure_error": apkpure_error
+            }), 500
+
+    # Import APK to repository
+    result = import_apk_to_repo(filepath, scan_virustotal)
+    result["source"] = source
+    if fallback_error:
+        result["primary_source_error"] = fallback_error
+
+    if result["success"]:
+        return jsonify(result)
+    else:
+        return jsonify(result), 500
+
+
+@app.route("/api/import/search", methods=["GET"])
+@require_api_key
+def api_search_playstore():
+    """
+    Search for apps on Google Play Store.
+
+    Query params:
+    - q: search query (required)
+    - limit: max results (optional, default 10)
+    """
+    query = request.args.get("q", "").strip()
+    limit = int(request.args.get("limit", 10))
+
+    if not query:
+        return jsonify({"error": "Search query required"}), 400
+
+    if not GOOGLE_PLAY_EMAIL or not GOOGLE_PLAY_PASSWORD:
+        return jsonify({"error": "Google Play credentials not configured"}), 500
+
+    try:
+        from gpapi.googleplay import GooglePlayAPI
+
+        api = GooglePlayAPI(locale="en_US", timezone="UTC")
+        api.login(GOOGLE_PLAY_EMAIL, GOOGLE_PLAY_PASSWORD)
+
+        results = api.search(query, nb_result=limit)
+
+        apps = []
+        for app in results:
+            doc = app.get("docV2", app)
+            apps.append({
+                "package": doc.get("docid", ""),
+                "title": doc.get("title", ""),
+                "creator": doc.get("creator", ""),
+                "icon": doc.get("image", [{}])[0].get("imageUrl", "") if doc.get("image") else ""
+            })
+
+        return jsonify({"query": query, "results": apps})
+
+    except Exception as e:
+        return jsonify({"error": f"Search failed: {str(e)}"}), 500
 
 
 if __name__ == "__main__":
