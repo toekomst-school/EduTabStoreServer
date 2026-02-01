@@ -21,6 +21,13 @@ init_repo() {
             mv "$REPO_DIR/config.yml" "$CONFIG_FILE"
             ln -s "$CONFIG_FILE" "$REPO_DIR/config.yml"
             echo "Config moved to /config/config.yml"
+
+            # Set proper defaults for EdutabStore
+            sed -i 's/repo_name: .*/repo_name: EdutabStore/' "$CONFIG_FILE"
+            sed -i 's/repo_description: .*/repo_description: Educational apps for tablets/' "$CONFIG_FILE"
+            sed -i 's/archive_name: .*/archive_name: EdutabStore Archive/' "$CONFIG_FILE"
+            sed -i 's/archive_description: .*/archive_description: Older versions of EdutabStore apps/' "$CONFIG_FILE"
+            echo "Set EdutabStore defaults in config"
         fi
 
         # Move keystore to config volume if generated
