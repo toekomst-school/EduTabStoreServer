@@ -890,13 +890,31 @@ def download_from_apkpure(package_name):
 
         soup = BeautifulSoup(response.text, "html.parser")
 
-        # Find download link
+        # Find download link - APKPure uses d.apkpure.com/b/APK/ pattern
         download_link = None
-        for link in soup.select("a[href*='.apk']"):
+
+        # Look for the direct APK download link (d.apkpure.com/b/APK/package)
+        for link in soup.select("a[href*='d.apkpure.com/b/APK/']"):
             href = link.get("href", "")
-            if ".apk" in href and "download" in href.lower():
+            if package_name in href:
                 download_link = href
                 break
+
+        # Fallback: look for any d.apkpure.com APK link
+        if not download_link:
+            for link in soup.select("a[href*='d.apkpure.com']"):
+                href = link.get("href", "")
+                if "/APK/" in href:
+                    download_link = href
+                    break
+
+        # Legacy fallback: look for .apk links
+        if not download_link:
+            for link in soup.select("a[href*='.apk']"):
+                href = link.get("href", "")
+                if ".apk" in href and "download" in href.lower():
+                    download_link = href
+                    break
 
         # Alternative: look for download button
         if not download_link:
