@@ -26,6 +26,26 @@ ALLOWED_IMAGE_EXTENSIONS = {"png", "jpg", "jpeg"}
 API_KEY = os.environ.get("ADMIN_API_KEY", "")
 VIRUSTOTAL_API_KEY = os.environ.get("VIRUSTOTAL_API_KEY", "")
 QUARANTINE_DIR = "/data/quarantine"
+CATEGORIES_FILE = os.path.join(CONFIG_DIR, "categories.json")
+
+
+def load_categories():
+    """Load predefined categories from config file"""
+    if not os.path.exists(CATEGORIES_FILE):
+        return []
+    try:
+        with open(CATEGORIES_FILE, "r") as f:
+            data = json.load(f)
+            return data.get("categories", [])
+    except Exception:
+        return []
+
+
+def save_categories(categories):
+    """Save predefined categories to config file"""
+    os.makedirs(CONFIG_DIR, exist_ok=True)
+    with open(CATEGORIES_FILE, "w") as f:
+        json.dump({"categories": categories}, f, indent=2)
 
 
 def require_api_key(f):
@@ -560,6 +580,25 @@ def get_app_info(package):
     yml_path = os.path.join(METADATA_DIR, f"{package}.yml")
     if os.path.exists(yml_path):
         info["has_yml_metadata"] = True
+        try:
+            import yaml
+            with open(yml_path, "r") as f:
+                yml_data = yaml.safe_load(f) or {}
+            # Add yml fields to metadata
+            if "Categories" in yml_data:
+                info["metadata"]["categories"] = yml_data["Categories"]
+            if "AuthorName" in yml_data:
+                info["metadata"]["authorName"] = yml_data["AuthorName"]
+            if "AuthorEmail" in yml_data:
+                info["metadata"]["authorEmail"] = yml_data["AuthorEmail"]
+            if "License" in yml_data:
+                info["metadata"]["license"] = yml_data["License"]
+            if "WebSite" in yml_data:
+                info["metadata"]["webSite"] = yml_data["WebSite"]
+            if "SourceCode" in yml_data:
+                info["metadata"]["sourceCode"] = yml_data["SourceCode"]
+        except Exception:
+            pass
 
     # Get VirusTotal scan results
     vt_results = get_virustotal_result(package)
@@ -1037,6 +1076,53 @@ def api_check_virustotal_analysis(analysis_id):
                 response["full_report_available"] = True
 
     return jsonify(response)
+
+
+@app.route("/api/categories", methods=["GET"])
+@require_api_key
+def api_list_categories():
+    """List all predefined categories"""
+    categories = load_categories()
+    return jsonify({"categories": categories})
+
+
+@app.route("/api/categories", methods=["POST"])
+@require_api_key
+def api_add_category():
+    """Add a new predefined category"""
+    data = request.get_json()
+    if not data or "name" not in data:
+        return jsonify({"error": "Category name required"}), 400
+
+    name = data["name"].strip()
+    if not name:
+        return jsonify({"error": "Category name cannot be empty"}), 400
+
+    categories = load_categories()
+
+    if name in categories:
+        return jsonify({"error": "Category already exists"}), 409
+
+    categories.append(name)
+    categories.sort()
+    save_categories(categories)
+
+    return jsonify({"success": True, "category": name, "categories": categories})
+
+
+@app.route("/api/categories/<name>", methods=["DELETE"])
+@require_api_key
+def api_delete_category(name):
+    """Delete a predefined category"""
+    categories = load_categories()
+
+    if name not in categories:
+        return jsonify({"error": "Category not found"}), 404
+
+    categories.remove(name)
+    save_categories(categories)
+
+    return jsonify({"success": True, "deleted": name, "categories": categories})
 
 
 @app.route("/api/health", methods=["GET"])
