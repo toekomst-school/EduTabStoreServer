@@ -70,15 +70,36 @@ def get_package_from_apk(apk_path):
 def run_fdroid_update():
     """Run fdroid update command"""
     try:
+        print("[fdroid] Running fdroid update --create-metadata --verbose")
         result = subprocess.run(
-            ["fdroid", "update", "--create-metadata"],
+            ["fdroid", "update", "--create-metadata", "--verbose"],
             cwd="/data/repo",
             capture_output=True,
             text=True,
             timeout=300
         )
-        return result.returncode == 0, result.stdout + result.stderr
+        output = result.stdout + result.stderr
+
+        if result.returncode != 0:
+            print(f"[fdroid] Update FAILED (exit code {result.returncode})")
+            print(f"[fdroid] Output: {output}")
+            return False, output
+
+        # Verify index was actually created
+        index_v1 = os.path.exists("/data/repo/repo/index-v1.jar")
+        index_v2 = os.path.exists("/data/repo/repo/index-v2.json")
+
+        if not index_v1 and not index_v2:
+            print("[fdroid] WARNING: Update succeeded but no index files found!")
+            return False, output + "\nWARNING: No index files generated"
+
+        print(f"[fdroid] Update successful (index-v1: {index_v1}, index-v2: {index_v2})")
+        return True, output
+    except subprocess.TimeoutExpired:
+        print("[fdroid] Update TIMEOUT after 5 minutes")
+        return False, "fdroid update timed out after 5 minutes"
     except Exception as e:
+        print(f"[fdroid] Update ERROR: {e}")
         return False, str(e)
 
 
