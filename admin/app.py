@@ -25,6 +25,7 @@ ALLOWED_EXTENSIONS = {"apk"}
 ALLOWED_IMAGE_EXTENSIONS = {"png", "jpg", "jpeg"}
 API_KEY = os.environ.get("ADMIN_API_KEY", "")
 VIRUSTOTAL_API_KEY = os.environ.get("VIRUSTOTAL_API_KEY", "")
+QUARANTINE_DIR = "/data/quarantine"
 
 
 def require_api_key(f):
@@ -65,6 +66,221 @@ def get_package_from_apk(apk_path):
     except Exception:
         pass
     return None
+
+
+def validate_apk_for_fdroid(apk_path):
+    """
+    Pre-validate APK to ensure it won't crash fdroid update.
+    Tests the same parsing that fdroid uses (androguard).
+    Returns (is_valid, error_message)
+    """
+    try:
+        from androguard.core.apk import APK
+
+        print(f"[validate] Testing APK: {os.path.basename(apk_path)}")
+
+        # Load APK (this parses AndroidManifest.xml)
+        apk = APK(apk_path)
+
+        # Get package info (basic validation)
+        package = apk.get_package()
+        if not package:
+            return False, "Could not extract package name from APK"
+
+        version_code = apk.get_androidversion_code()
+        version_name = apk.get_androidversion_name()
+
+        print(f"[validate] Package: {package}, version: {version_name} ({version_code})")
+
+        # Try to get resources - this is what usually crashes fdroid
+        try:
+            resources = apk.get_android_resources()
+            if resources:
+                # Try to actually parse the resources (triggers ResParserError if broken)
+                _ = resources.get_packages_names()
+                print(f"[validate] Resources parsed successfully")
+        except Exception as res_error:
+            error_msg = str(res_error)
+            # Check for known androguard parsing errors
+            if "res0 must be" in error_msg or "res1 must be" in error_msg or "reserved must be" in error_msg:
+                return False, f"APK has incompatible resources.arsc format (androguard cannot parse it): {error_msg}"
+            elif "KeyError" in error_msg and "resources.arsc" in error_msg:
+                return False, "APK is missing resources.arsc or it cannot be read"
+            else:
+                # Log but don't fail for other resource errors - some APKs work despite this
+                print(f"[validate] Warning: Resource parsing issue (non-fatal): {error_msg}")
+
+        # Verify APK signature using apksigner (if available)
+        try:
+            sig_result = subprocess.run(
+                ["apksigner", "verify", "--print-certs", apk_path],
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+            if sig_result.returncode != 0:
+                # Check if it's a critical signature error
+                if "DOES NOT VERIFY" in sig_result.stdout or "ERROR" in sig_result.stderr:
+                    return False, f"APK signature verification failed: {sig_result.stderr or sig_result.stdout}"
+                print(f"[validate] Signature check warning: {sig_result.stderr}")
+            else:
+                print(f"[validate] Signature verified")
+        except FileNotFoundError:
+            print("[validate] apksigner not available, skipping signature check")
+        except Exception as sig_error:
+            print(f"[validate] Signature check error (non-fatal): {sig_error}")
+
+        print(f"[validate] APK validation passed: {package}")
+        return True, None
+
+    except ImportError:
+        # Androguard not installed - fall back to basic aapt check
+        print("[validate] Androguard not available, using basic validation")
+        package = get_package_from_apk(apk_path)
+        if package:
+            return True, None
+        return False, "Could not read APK package info"
+
+    except Exception as e:
+        error_msg = str(e)
+        print(f"[validate] APK validation failed: {error_msg}")
+
+        # Provide helpful error messages for common issues
+        if "is not a valid zip file" in error_msg.lower() or "bad zip file" in error_msg.lower():
+            return False, "File is not a valid APK (corrupted or not a zip file)"
+        elif "AndroidManifest.xml" in error_msg:
+            return False, f"APK has invalid AndroidManifest.xml: {error_msg}"
+
+        return False, f"APK validation failed: {error_msg}"
+
+
+def quarantine_apk(apk_path, reason):
+    """Move a failed APK to quarantine directory with error info"""
+    os.makedirs(QUARANTINE_DIR, exist_ok=True)
+
+    filename = os.path.basename(apk_path)
+    timestamp = int(time.time())
+    quarantine_name = f"{timestamp}_{filename}"
+    quarantine_path = os.path.join(QUARANTINE_DIR, quarantine_name)
+
+    # Move the APK
+    shutil.move(apk_path, quarantine_path)
+
+    # Write error info
+    info_path = os.path.join(QUARANTINE_DIR, f"{quarantine_name}.txt")
+    with open(info_path, "w") as f:
+        f.write(f"Original filename: {filename}\n")
+        f.write(f"Quarantined at: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write(f"Reason: {reason}\n")
+
+    print(f"[quarantine] Moved {filename} to quarantine: {reason}")
+    return quarantine_path
+
+
+def check_virustotal_safety(apk_path, max_malicious=0, max_suspicious=2):
+    """
+    Pre-check APK against VirusTotal before accepting it.
+    Returns (is_safe, result_dict)
+
+    result_dict contains:
+    - status: 'safe', 'unsafe', 'unknown', 'error', 'skipped'
+    - detections: dict with malicious/suspicious counts (if known)
+    - message: human-readable explanation
+    """
+    if not VIRUSTOTAL_API_KEY:
+        return True, {
+            "status": "skipped",
+            "message": "VirusTotal API key not configured, skipping safety check"
+        }
+
+    try:
+        sha256 = get_file_sha256(apk_path)
+        print(f"[virustotal] Checking SHA256: {sha256}")
+
+        # Check if file is already known to VirusTotal
+        vt_report, vt_error = virustotal_get_file_report(sha256)
+
+        if vt_error and "not found" in vt_error.lower():
+            # File not in VirusTotal database - it's unknown
+            print(f"[virustotal] File not in database (unknown)")
+            return True, {
+                "status": "unknown",
+                "sha256": sha256,
+                "message": "File not yet scanned by VirusTotal. Will be submitted for scanning."
+            }
+
+        if vt_error:
+            print(f"[virustotal] API error: {vt_error}")
+            return True, {
+                "status": "error",
+                "message": f"VirusTotal check failed: {vt_error}"
+            }
+
+        if not vt_report:
+            return True, {
+                "status": "unknown",
+                "sha256": sha256,
+                "message": "Could not get VirusTotal report"
+            }
+
+        # Extract detection stats
+        stats = extract_virustotal_stats(vt_report)
+        if not stats:
+            return True, {
+                "status": "unknown",
+                "sha256": sha256,
+                "message": "Could not parse VirusTotal results"
+            }
+
+        malicious = stats.get("malicious", 0)
+        suspicious = stats.get("suspicious", 0)
+        total = stats.get("total", 0)
+
+        print(f"[virustotal] Results: {malicious} malicious, {suspicious} suspicious out of {total} engines")
+
+        # Check against thresholds
+        if malicious > max_malicious:
+            return False, {
+                "status": "unsafe",
+                "sha256": sha256,
+                "detections": {
+                    "malicious": malicious,
+                    "suspicious": suspicious,
+                    "total": total
+                },
+                "message": f"APK flagged as malicious by {malicious} antivirus engines (threshold: {max_malicious})"
+            }
+
+        if suspicious > max_suspicious:
+            return False, {
+                "status": "unsafe",
+                "sha256": sha256,
+                "detections": {
+                    "malicious": malicious,
+                    "suspicious": suspicious,
+                    "total": total
+                },
+                "message": f"APK flagged as suspicious by {suspicious} antivirus engines (threshold: {max_suspicious})"
+            }
+
+        # File is safe
+        return True, {
+            "status": "safe",
+            "sha256": sha256,
+            "detections": {
+                "malicious": malicious,
+                "suspicious": suspicious,
+                "total": total
+            },
+            "message": f"APK passed VirusTotal check ({malicious} malicious, {suspicious} suspicious)"
+        }
+
+    except Exception as e:
+        print(f"[virustotal] Check error: {e}")
+        return True, {
+            "status": "error",
+            "message": f"VirusTotal check failed: {str(e)}"
+        }
 
 
 def run_fdroid_update():
@@ -395,6 +611,31 @@ def api_upload_apk():
         os.remove(temp_path)
         return jsonify({"error": "Could not read package info from APK"}), 400
 
+    # Pre-validate APK to ensure it won't crash fdroid update
+    is_valid, validation_error = validate_apk_for_fdroid(temp_path)
+    if not is_valid:
+        quarantine_apk(temp_path, validation_error)
+        return jsonify({
+            "error": "APK validation failed",
+            "details": validation_error,
+            "quarantined": True,
+            "hint": "The APK may be built with incompatible tools. Try a different version or build variant."
+        }), 400
+
+    # Pre-check VirusTotal for known malware (if enabled)
+    if scan_virustotal:
+        is_safe, vt_result = check_virustotal_safety(temp_path)
+        if not is_safe:
+            quarantine_apk(temp_path, f"VirusTotal: {vt_result.get('message', 'Unsafe')}")
+            return jsonify({
+                "error": "APK flagged as unsafe by VirusTotal",
+                "details": vt_result.get("message"),
+                "detections": vt_result.get("detections"),
+                "sha256": vt_result.get("sha256"),
+                "quarantined": True,
+                "hint": "This APK has been flagged by antivirus engines. Do not install it."
+            }), 400
+
     # Calculate SHA256 for VirusTotal
     sha256 = get_file_sha256(temp_path)
 
@@ -414,19 +655,17 @@ def api_upload_apk():
         "output": output if not success else "Repository updated"
     }
 
-    # Trigger VirusTotal scan
+    # Save VirusTotal results (already checked above, now save for record)
     if scan_virustotal and VIRUSTOTAL_API_KEY:
-        # First check if already scanned
         vt_report, vt_error = virustotal_get_file_report(sha256)
         if vt_report:
-            # Already scanned, save the result
             save_virustotal_result(package, sha256, vt_report)
             stats = extract_virustotal_stats(vt_report)
             response_data["virustotal"] = {
                 "status": "completed",
                 "sha256": sha256,
                 "stats": stats,
-                "message": "File already in VirusTotal database"
+                "message": "File passed VirusTotal check"
             }
         else:
             # Need to upload for scanning
@@ -886,6 +1125,33 @@ def import_apk_to_repo(apk_path, scan_virustotal=True):
         os.remove(apk_path)
         return {"success": False, "error": "Could not read package info from APK"}
 
+    # Pre-validate APK to ensure it won't crash fdroid update
+    is_valid, validation_error = validate_apk_for_fdroid(apk_path)
+    if not is_valid:
+        quarantine_apk(apk_path, validation_error)
+        return {
+            "success": False,
+            "error": "APK validation failed",
+            "details": validation_error,
+            "quarantined": True,
+            "hint": "The APK may be built with incompatible tools. Try a different version or build variant."
+        }
+
+    # Pre-check VirusTotal for known malware
+    if scan_virustotal:
+        is_safe, vt_result = check_virustotal_safety(apk_path)
+        if not is_safe:
+            quarantine_apk(apk_path, f"VirusTotal: {vt_result.get('message', 'Unsafe')}")
+            return {
+                "success": False,
+                "error": "APK flagged as unsafe by VirusTotal",
+                "details": vt_result.get("message"),
+                "detections": vt_result.get("detections"),
+                "sha256": vt_result.get("sha256"),
+                "quarantined": True,
+                "hint": "This APK has been flagged by antivirus engines. Do not install it."
+            }
+
     # Calculate SHA256
     sha256 = get_file_sha256(apk_path)
 
@@ -906,9 +1172,8 @@ def import_apk_to_repo(apk_path, scan_virustotal=True):
         "output": fdroid_output if not fdroid_success else "Repository updated"
     }
 
-    # VirusTotal scan
+    # Save VirusTotal results for record
     if scan_virustotal and VIRUSTOTAL_API_KEY:
-        # Check if already scanned
         vt_report, _ = virustotal_get_file_report(sha256)
         if vt_report:
             save_virustotal_result(package, sha256, vt_report)
