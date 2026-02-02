@@ -9,6 +9,9 @@ services:
     environment:
       - KEYSTOREPASS=${KEYSTOREPASS:-android}
       - ANDROID_HOME=/opt/android-sdk
+      - REPO_NAME=${REPO_NAME:-EdutabStore}
+      - REPO_URL=${REPO_URL:-https://store.edutab.nl/repo}
+      - REPO_DESCRIPTION=${REPO_DESCRIPTION:-Educational apps for tablets}
 
   nginx:
     image: nginx:alpine

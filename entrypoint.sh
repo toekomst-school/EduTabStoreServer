@@ -15,12 +15,31 @@ ARCHIVE_DESCRIPTION="${ARCHIVE_DESCRIPTION:-Older versions of ${REPO_NAME} apps}
 apply_env_config() {
     if [ -f "$CONFIG_FILE" ]; then
         echo "Applying environment config..."
-        # Use flexible patterns (with or without quotes, any whitespace)
-        sed -i "s|^\s*repo_name:.*|repo_name: ${REPO_NAME}|" "$CONFIG_FILE"
-        sed -i "s|^\s*repo_description:.*|repo_description: ${REPO_DESCRIPTION}|" "$CONFIG_FILE"
-        sed -i "s|^\s*repo_url:.*|repo_url: ${REPO_URL}|" "$CONFIG_FILE"
-        sed -i "s|^\s*archive_name:.*|archive_name: ${ARCHIVE_NAME}|" "$CONFIG_FILE"
-        sed -i "s|^\s*archive_description:.*|archive_description: ${ARCHIVE_DESCRIPTION}|" "$CONFIG_FILE"
+
+        # Use Python to reliably update YAML config
+        python3 << PYEOF
+import yaml
+import os
+
+config_file = "$CONFIG_FILE"
+with open(config_file, 'r') as f:
+    config = yaml.safe_load(f) or {}
+
+# Update from environment variables
+config['repo_name'] = "${REPO_NAME}"
+config['repo_description'] = "${REPO_DESCRIPTION}"
+config['repo_url'] = "${REPO_URL}"
+config['archive_name'] = "${ARCHIVE_NAME}"
+config['archive_description'] = "${ARCHIVE_DESCRIPTION}"
+
+# Ensure keystore path is correct
+config['keystore'] = '/config/keystore.p12'
+
+with open(config_file, 'w') as f:
+    yaml.dump(config, f, default_flow_style=False, allow_unicode=True)
+
+print(f"Updated config: repo_name={config['repo_name']}, repo_url={config['repo_url']}")
+PYEOF
 
         # Show current config values
         echo "Config values:"

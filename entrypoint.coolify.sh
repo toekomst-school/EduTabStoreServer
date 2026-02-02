@@ -42,14 +42,28 @@ fi
 # Create symlink to config
 ln -sf "$CONFIG_DIR/config.yml" "$REPO_DIR/config.yml"
 
-# Always apply environment config on startup
+# Always apply environment config on startup using Python for reliable YAML handling
 echo "Applying environment config..."
-sed -i "s|^\s*repo_name:.*|repo_name: $REPO_NAME|" "$CONFIG_DIR/config.yml"
-sed -i "s|^\s*repo_description:.*|repo_description: $REPO_DESCRIPTION|" "$CONFIG_DIR/config.yml"
-sed -i "s|^\s*repo_url:.*|repo_url: $REPO_URL|" "$CONFIG_DIR/config.yml"
-sed -i "s|^\s*archive_name:.*|archive_name: $ARCHIVE_NAME|" "$CONFIG_DIR/config.yml"
-sed -i "s|^\s*archive_description:.*|archive_description: $ARCHIVE_DESCRIPTION|" "$CONFIG_DIR/config.yml"
-echo "Config: repo_name=$REPO_NAME, repo_url=$REPO_URL"
+python3 << PYEOF
+import yaml
+
+config_file = "$CONFIG_DIR/config.yml"
+with open(config_file, 'r') as f:
+    config = yaml.safe_load(f) or {}
+
+# Update from environment variables
+config['repo_name'] = "$REPO_NAME"
+config['repo_description'] = "$REPO_DESCRIPTION"
+config['repo_url'] = "$REPO_URL"
+config['archive_name'] = "$ARCHIVE_NAME"
+config['archive_description'] = "$ARCHIVE_DESCRIPTION"
+config['keystore'] = "$CONFIG_DIR/keystore.p12"
+
+with open(config_file, 'w') as f:
+    yaml.dump(config, f, default_flow_style=False, allow_unicode=True)
+
+print(f"Config: repo_name={config['repo_name']}, repo_url={config['repo_url']}")
+PYEOF
 
 # Rebuild index with updated config
 echo "Rebuilding repository index..."
