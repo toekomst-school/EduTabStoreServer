@@ -1837,9 +1837,9 @@ def build_pwa_apk(manifest_url, package_id, app_name, signing_key_config):
 
     try:
         os.makedirs(work_dir, exist_ok=True)
-        print(f"[pwa] Building PWA APK in {work_dir}")
-        print(f"[pwa] Manifest URL: {manifest_url}")
-        print(f"[pwa] Package ID: {package_id}")
+        print(f"[pwa] Building PWA APK in {work_dir}", flush=True)
+        print(f"[pwa] Manifest URL: {manifest_url}", flush=True)
+        print(f"[pwa] Package ID: {package_id}", flush=True)
 
         # Setup bubblewrap config to avoid interactive prompts
         setup_bubblewrap_config()
@@ -1861,21 +1861,34 @@ def build_pwa_apk(manifest_url, package_id, app_name, signing_key_config):
                 "jdkPath": "/usr/lib/jvm/java-17-openjdk-amd64",
                 "androidSdkPath": "/opt/android-sdk"
             }, f)
-        print(f"[pwa] Config written to {config_path}")
+        print(f"[pwa] Config written to {config_path}", flush=True)
 
-        # Initialize Bubblewrap project with manifest using expect script
-        # This handles the interactive prompts properly via pseudo-TTY
-        print(f"[pwa] Running bubblewrap init via expect script...")
-        jdk_path = "/usr/lib/jvm/java-17-openjdk-amd64"
-        sdk_path = "/opt/android-sdk"
+        # Initialize Bubblewrap project with manifest
+        # Use unbuffer to create a PTY so inquirer prompts work with piped input
+        print(f"[pwa] Running bubblewrap init...", flush=True)
 
+        # Prepare input for interactive prompts
+        init_input = "\n".join([
+            "n",  # Don't install JDK
+            "/usr/lib/jvm/java-17-openjdk-amd64",  # JDK path
+            "n",  # Don't install Android SDK
+            "/opt/android-sdk",  # Android SDK path
+        ] + ["y"] * 20 + [""])  # Accept confirmations
+
+        # Use unbuffer to create pseudo-TTY for inquirer
         init_result = subprocess.run(
-            ["/opt/admin/bubblewrap-init.exp", manifest_url, work_dir, jdk_path, sdk_path],
+            ["unbuffer", "-p", "bubblewrap", "init", "--manifest", manifest_url],
+            cwd=work_dir,
             env=env,
             capture_output=True,
             text=True,
-            timeout=300
+            timeout=300,
+            input=init_input
         )
+
+        print(f"[pwa] Init return code: {init_result.returncode}", flush=True)
+        print(f"[pwa] Init stdout: {init_result.stdout[:1000] if init_result.stdout else 'none'}", flush=True)
+        print(f"[pwa] Init stderr: {init_result.stderr[:1000] if init_result.stderr else 'none'}", flush=True)
 
         if init_result.returncode != 0:
             print(f"[pwa] Bubblewrap init output: {init_result.stdout}")

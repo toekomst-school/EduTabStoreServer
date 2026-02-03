@@ -2,7 +2,7 @@ FROM debian:bookworm-slim
 
 LABEL maintainer="EdutabStore"
 LABEL description="EdutabStore F-Droid Repository Server"
-LABEL build.version="2026-02-03-v3"
+LABEL build.version="2026-02-03-v4"
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV ANDROID_HOME=/opt/android-sdk
