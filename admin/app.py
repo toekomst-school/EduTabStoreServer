@@ -9,6 +9,8 @@ import shutil
 import hashlib
 import json
 import time
+import uuid
+import threading
 import requests
 from functools import wraps
 from flask import Flask, request, jsonify
@@ -1689,6 +1691,11 @@ PWA_KEYSTORE_PATH = os.environ.get("PWA_KEYSTORE_PATH", "/data/config/pwa-keysto
 PWA_KEYSTORE_PASSWORD = os.environ.get("PWA_KEYSTORE_PASSWORD", "edutab")
 PWA_KEYSTORE_ALIAS = os.environ.get("PWA_KEYSTORE_ALIAS", "pwa-key")
 
+# Job storage for async PWA builds
+# Format: {job_id: {"status": "pending|building|completed|failed", "result": {...}, "error": "...", "created_at": timestamp}}
+pwa_build_jobs = {}
+pwa_build_jobs_lock = threading.Lock()
+
 
 def fetch_pwa_manifest(url):
     """
@@ -2005,11 +2012,114 @@ def api_fetch_pwa_manifest():
     return jsonify(result)
 
 
+def pwa_build_worker(job_id, url, manifest, manifest_url, app_name, package_id, signing_config):
+    """
+    Background worker that builds the PWA APK.
+    Updates job status in pwa_build_jobs dict.
+    """
+    try:
+        with pwa_build_jobs_lock:
+            pwa_build_jobs[job_id]["status"] = "building"
+            pwa_build_jobs[job_id]["message"] = "Building APK with Bubblewrap..."
+
+        print(f"[pwa] Job {job_id}: Starting build for {url}", flush=True)
+
+        # Build APK
+        apk_path, build_error = build_pwa_apk(manifest_url, package_id, app_name, signing_config)
+        if build_error:
+            with pwa_build_jobs_lock:
+                pwa_build_jobs[job_id]["status"] = "failed"
+                pwa_build_jobs[job_id]["error"] = build_error
+            print(f"[pwa] Job {job_id}: Build failed - {build_error}", flush=True)
+            return
+
+        with pwa_build_jobs_lock:
+            pwa_build_jobs[job_id]["message"] = "Validating APK..."
+
+        # Validate the generated APK
+        is_valid, validation_error = validate_apk_for_fdroid(apk_path)
+        if not is_valid:
+            os.remove(apk_path)
+            with pwa_build_jobs_lock:
+                pwa_build_jobs[job_id]["status"] = "failed"
+                pwa_build_jobs[job_id]["error"] = f"APK validation failed: {validation_error}"
+            print(f"[pwa] Job {job_id}: Validation failed - {validation_error}", flush=True)
+            return
+
+        with pwa_build_jobs_lock:
+            pwa_build_jobs[job_id]["message"] = "Importing to repository..."
+
+        # Import APK to repository
+        result = import_apk_to_repo(apk_path, scan_virustotal=False)
+
+        if result["success"]:
+            # Update metadata with PWA info
+            try:
+                metadata = {
+                    "name": app_name,
+                    "summary": manifest.get("description", f"PWA wrapper for {url}")[:80],
+                    "description": manifest.get("description", f"This app is a PWA (Progressive Web App) wrapper for {url}"),
+                    "webSite": url,
+                    "categories": ["PWA"]
+                }
+
+                # Update metadata directory
+                locale_dir = os.path.join(METADATA_DIR, package_id, "en-US")
+                os.makedirs(locale_dir, exist_ok=True)
+
+                with open(os.path.join(locale_dir, "title.txt"), "w") as f:
+                    f.write(app_name)
+                with open(os.path.join(locale_dir, "summary.txt"), "w") as f:
+                    f.write(metadata["summary"])
+                with open(os.path.join(locale_dir, "full_description.txt"), "w") as f:
+                    f.write(metadata["description"])
+
+                # Write yml metadata
+                import yaml
+                yml_path = os.path.join(METADATA_DIR, f"{package_id}.yml")
+                yml_data = {
+                    "Categories": ["PWA"],
+                    "WebSite": url,
+                    "AuthorName": "PWA Builder"
+                }
+                with open(yml_path, "w") as f:
+                    yaml.dump(yml_data, f, default_flow_style=False)
+
+                # Re-run fdroid update
+                run_fdroid_update()
+
+            except Exception as e:
+                print(f"[pwa] Job {job_id}: Warning - Failed to update metadata: {e}", flush=True)
+
+            result["pwa_info"] = {
+                "name": app_name,
+                "url": url,
+                "manifest_url": manifest_url,
+                "package_id": package_id
+            }
+
+            with pwa_build_jobs_lock:
+                pwa_build_jobs[job_id]["status"] = "completed"
+                pwa_build_jobs[job_id]["result"] = result
+            print(f"[pwa] Job {job_id}: Build completed successfully", flush=True)
+        else:
+            with pwa_build_jobs_lock:
+                pwa_build_jobs[job_id]["status"] = "failed"
+                pwa_build_jobs[job_id]["error"] = result.get("error", "Failed to import APK")
+            print(f"[pwa] Job {job_id}: Import failed", flush=True)
+
+    except Exception as e:
+        print(f"[pwa] Job {job_id}: Exception - {str(e)}", flush=True)
+        with pwa_build_jobs_lock:
+            pwa_build_jobs[job_id]["status"] = "failed"
+            pwa_build_jobs[job_id]["error"] = str(e)
+
+
 @app.route("/api/pwa/build", methods=["POST"])
 @require_api_key
 def api_build_pwa():
     """
-    Build an APK from a PWA URL and add it to the repository.
+    Start an async PWA APK build job.
 
     Request body:
     {
@@ -2017,6 +2127,8 @@ def api_build_pwa():
         "name": "My PWA App",  // optional, fetched from manifest if not provided
         "package_id": "com.example.pwa"  // optional, generated if not provided
     }
+
+    Returns immediately with a job_id to poll for status.
     """
     data = request.get_json()
     if not data or "url" not in data:
@@ -2026,7 +2138,7 @@ def api_build_pwa():
     if not url.startswith("http"):
         url = "https://" + url
 
-    # Fetch manifest first
+    # Fetch manifest first (this is quick, do it synchronously)
     manifest, manifest_url, error = fetch_pwa_manifest(url)
     if error:
         return jsonify({"error": f"Failed to fetch manifest: {error}"}), 400
@@ -2061,70 +2173,73 @@ def api_build_pwa():
         "password": PWA_KEYSTORE_PASSWORD
     }
 
-    # Build APK
-    apk_path, build_error = build_pwa_apk(manifest_url, package_id, app_name, signing_config)
-    if build_error:
-        return jsonify({"error": build_error}), 500
-
-    # Validate the generated APK
-    is_valid, validation_error = validate_apk_for_fdroid(apk_path)
-    if not is_valid:
-        os.remove(apk_path)
-        return jsonify({
-            "error": "Generated APK validation failed",
-            "details": validation_error
-        }), 500
-
-    # Import APK to repository
-    result = import_apk_to_repo(apk_path, scan_virustotal=False)
-
-    if result["success"]:
-        # Update metadata with PWA info
-        try:
-            metadata = {
-                "name": app_name,
-                "summary": manifest.get("description", f"PWA wrapper for {url}")[:80],
-                "description": manifest.get("description", f"This app is a PWA (Progressive Web App) wrapper for {url}"),
-                "webSite": url,
-                "categories": ["PWA"]
-            }
-
-            # Update metadata directory
-            locale_dir = os.path.join(METADATA_DIR, package_id, "en-US")
-            os.makedirs(locale_dir, exist_ok=True)
-
-            with open(os.path.join(locale_dir, "title.txt"), "w") as f:
-                f.write(app_name)
-            with open(os.path.join(locale_dir, "summary.txt"), "w") as f:
-                f.write(metadata["summary"])
-            with open(os.path.join(locale_dir, "full_description.txt"), "w") as f:
-                f.write(metadata["description"])
-
-            # Write yml metadata
-            import yaml
-            yml_path = os.path.join(METADATA_DIR, f"{package_id}.yml")
-            yml_data = {
-                "Categories": ["PWA"],
-                "WebSite": url,
-                "AuthorName": "PWA Builder"
-            }
-            with open(yml_path, "w") as f:
-                yaml.dump(yml_data, f, default_flow_style=False)
-
-            # Re-run fdroid update
-            run_fdroid_update()
-
-        except Exception as e:
-            print(f"[pwa] Warning: Failed to update metadata: {e}")
-
-        result["pwa_info"] = {
-            "name": app_name,
-            "url": url,
-            "manifest_url": manifest_url,
-            "package_id": package_id
+    # Create job
+    job_id = str(uuid.uuid4())
+    with pwa_build_jobs_lock:
+        pwa_build_jobs[job_id] = {
+            "status": "pending",
+            "message": "Starting build...",
+            "created_at": time.time(),
+            "app_name": app_name,
+            "package_id": package_id,
+            "url": url
         }
 
-    return jsonify(result)
+    # Start background thread
+    thread = threading.Thread(
+        target=pwa_build_worker,
+        args=(job_id, url, manifest, manifest_url, app_name, package_id, signing_config),
+        daemon=True
+    )
+    thread.start()
+
+    print(f"[pwa] Started job {job_id} for {url}", flush=True)
+
+    return jsonify({
+        "job_id": job_id,
+        "status": "pending",
+        "message": "Build job started"
+    })
+
+
+@app.route("/api/pwa/build/status/<job_id>", methods=["GET"])
+@require_api_key
+def api_pwa_build_status(job_id):
+    """
+    Check the status of a PWA build job.
+
+    Returns:
+    - status: "pending", "building", "completed", or "failed"
+    - message: Current status message
+    - result: Build result (only when completed)
+    - error: Error message (only when failed)
+    """
+    with pwa_build_jobs_lock:
+        if job_id not in pwa_build_jobs:
+            return jsonify({"error": "Job not found"}), 404
+
+        job = pwa_build_jobs[job_id].copy()
+
+    response = {
+        "job_id": job_id,
+        "status": job.get("status", "unknown"),
+        "message": job.get("message", ""),
+        "app_name": job.get("app_name"),
+        "package_id": job.get("package_id"),
+        "url": job.get("url")
+    }
+
+    if job.get("status") == "completed":
+        response["result"] = job.get("result")
+        # Clean up old completed jobs (keep for 1 hour)
+        if time.time() - job.get("created_at", 0) > 3600:
+            with pwa_build_jobs_lock:
+                pwa_build_jobs.pop(job_id, None)
+
+    if job.get("status") == "failed":
+        response["error"] = job.get("error")
+
+    return jsonify(response)
 
 
 if __name__ == "__main__":
