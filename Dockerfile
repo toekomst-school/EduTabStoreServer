@@ -37,6 +37,9 @@ RUN mkdir -p ${ANDROID_HOME}/cmdline-tools && \
 RUN yes | sdkmanager --licenses && \
     sdkmanager "platform-tools" "build-tools;34.0.0"
 
+# Create symlink for bubblewrap compatibility (expects tools or bin in SDK root)
+RUN ln -s ${ANDROID_HOME}/cmdline-tools/latest/bin ${ANDROID_HOME}/bin
+
 # Install apkeep for APK downloads
 RUN wget -q https://github.com/EFForg/apkeep/releases/download/0.18.0/apkeep-x86_64-unknown-linux-gnu -O /usr/local/bin/apkeep && \
     chmod +x /usr/local/bin/apkeep

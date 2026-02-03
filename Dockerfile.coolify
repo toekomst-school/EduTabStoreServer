@@ -2,7 +2,7 @@ FROM debian:bookworm-slim
 
 LABEL maintainer="EdutabStore"
 LABEL description="EdutabStore F-Droid Repository Server"
-LABEL build.version="2026-02-03-v6"
+LABEL build.version="2026-02-03-v7"
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV ANDROID_HOME=/opt/android-sdk
@@ -31,6 +31,9 @@ RUN mkdir -p ${ANDROID_HOME}/cmdline-tools && \
 # Accept Android SDK licenses
 RUN yes | sdkmanager --licenses && \
     sdkmanager "platform-tools" "build-tools;34.0.0"
+
+# Create symlink for bubblewrap compatibility (expects tools or bin in SDK root)
+RUN ln -s ${ANDROID_HOME}/cmdline-tools/latest/bin ${ANDROID_HOME}/bin
 
 # Install apkeep for APK downloads
 RUN wget -q https://github.com/EFForg/apkeep/releases/download/0.18.0/apkeep-x86_64-unknown-linux-gnu -O /usr/local/bin/apkeep && \
