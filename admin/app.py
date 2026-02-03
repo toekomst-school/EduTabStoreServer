@@ -1846,13 +1846,38 @@ def build_pwa_apk(manifest_url, package_id, app_name, signing_key_config):
 
         # Set environment for Bubblewrap
         env = os.environ.copy()
+        env["HOME"] = "/root"  # Ensure HOME is set for config file lookup
         env["JAVA_HOME"] = "/usr/lib/jvm/java-17-openjdk-amd64"
         env["ANDROID_HOME"] = "/opt/android-sdk"
         env["ANDROID_SDK_ROOT"] = "/opt/android-sdk"
         env["GRADLE_USER_HOME"] = "/root/.gradle"
 
+        # Ensure Bubblewrap config exists
+        config_dir = "/root/.aspect"
+        config_path = os.path.join(config_dir, "aspect-config.json")
+        os.makedirs(config_dir, exist_ok=True)
+        with open(config_path, "w") as f:
+            json.dump({
+                "jdkPath": "/usr/lib/jvm/java-17-openjdk-amd64",
+                "androidSdkPath": "/opt/android-sdk"
+            }, f)
+        print(f"[pwa] Config written to {config_path}")
+
         # Initialize Bubblewrap project with manifest
         print(f"[pwa] Running bubblewrap init...")
+        # Input sequence for Bubblewrap prompts:
+        # 1. "Do you want Bubblewrap to install the JDK?" -> n (use our own)
+        # 2. "Path to your existing JDK 17:" -> path
+        # 3. "Do you want Bubblewrap to install Android SDK?" -> n (use our own)
+        # 4. "Path to your existing Android SDK:" -> path
+        # 5+ Various confirmations -> y
+        init_input = "\n".join([
+            "n",  # Don't install JDK
+            "/usr/lib/jvm/java-17-openjdk-amd64",  # JDK path
+            "n",  # Don't install Android SDK
+            "/opt/android-sdk",  # Android SDK path
+        ] + ["y"] * 20)  # Accept any additional prompts/confirmations
+
         init_result = subprocess.run(
             ["bubblewrap", "init", "--manifest", manifest_url],
             cwd=work_dir,
@@ -1860,11 +1885,7 @@ def build_pwa_apk(manifest_url, package_id, app_name, signing_key_config):
             capture_output=True,
             text=True,
             timeout=300,
-            input="\n".join([
-                "/usr/lib/jvm/java-17-openjdk-amd64",  # JDK path
-                "/opt/android-sdk",  # Android SDK path
-                "y",  # Accept
-            ] + ["y"] * 10)  # Accept any additional prompts
+            input=init_input
         )
 
         if init_result.returncode != 0:
