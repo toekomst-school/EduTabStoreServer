@@ -7,7 +7,7 @@
 const path = require('path');
 const fs = require('fs');
 
-async function buildPwaApk(manifestUrl, outputDir, signingConfig) {
+async function buildPwaApk(manifestUrl, outputDir, signingConfig, customPackageId) {
     // Dynamic import for ESM module
     const bubblewrap = await import('@bubblewrap/core');
     const { TwaManifest, TwaGenerator, GradleWrapper, AndroidSdkTools, JdkHelper, Config, ConsoleLog } = bubblewrap;
@@ -30,6 +30,12 @@ async function buildPwaApk(manifestUrl, outputDir, signingConfig) {
         // Fetch and create TWA manifest
         console.log('[pwa-builder] Fetching manifest...');
         const twaManifest = await TwaManifest.fromWebManifest(manifestUrl);
+
+        // Override package ID if custom one provided
+        if (customPackageId) {
+            twaManifest.packageId = customPackageId;
+            console.log(`[pwa-builder] Using custom package ID: ${customPackageId}`);
+        }
 
         console.log(`[pwa-builder] App name: ${twaManifest.name}`);
         console.log(`[pwa-builder] Package: ${twaManifest.packageId}`);
@@ -123,7 +129,7 @@ async function main() {
     const args = process.argv.slice(2);
 
     if (args.length < 2) {
-        console.log('Usage: pwa-builder.js <manifest-url> <output-dir> [keystore-path] [key-alias] [key-password]');
+        console.log('Usage: pwa-builder.js <manifest-url> <output-dir> [keystore-path] [key-alias] [key-password] [package-id]');
         process.exit(1);
     }
 
@@ -134,8 +140,9 @@ async function main() {
         alias: args[3],
         password: args[4]
     } : null;
+    const customPackageId = args[5] || null;
 
-    const result = await buildPwaApk(manifestUrl, outputDir, signingConfig);
+    const result = await buildPwaApk(manifestUrl, outputDir, signingConfig, customPackageId);
     console.log(JSON.stringify(result));
     process.exit(result.success ? 0 : 1);
 }

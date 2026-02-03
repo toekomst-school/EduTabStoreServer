@@ -1859,7 +1859,8 @@ def build_pwa_apk(manifest_url, package_id, app_name, signing_key_config):
              work_dir,
              signing_key_config["path"],
              signing_key_config["alias"],
-             signing_key_config["password"]],
+             signing_key_config["password"],
+             package_id],  # Pass custom package ID to override bubblewrap's default
             env=env,
             capture_output=True,
             text=True,
