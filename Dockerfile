@@ -53,8 +53,12 @@ RUN npm install -g @nicolo-ribaudo/nicolo-ribaudo-bubblewrap-cli && \
     chmod -R 755 /root/.aspect
 
 # Create directories
-RUN mkdir -p /data/repo /data/config /data/unsigned /var/log/supervisor && \
+RUN mkdir -p /data/repo /data/config /data/unsigned /data/virustotal /data/pwa-builds /var/log/supervisor && \
     chown -R www-data:www-data /data
+
+# Copy admin API and install dependencies
+COPY admin /opt/admin
+RUN pip3 install --no-cache-dir --break-system-packages -r /opt/admin/requirements.txt
 
 # Copy configuration files
 COPY nginx.coolify.conf /etc/nginx/sites-available/default

@@ -46,6 +46,52 @@ def save_categories(categories):
     os.makedirs(CONFIG_DIR, exist_ok=True)
     with open(CATEGORIES_FILE, "w") as f:
         json.dump({"categories": categories}, f, indent=2)
+    # Also sync to F-Droid repo config
+    sync_categories_to_fdroid(categories)
+
+
+def sync_categories_to_fdroid(categories=None):
+    """Sync categories to F-Droid's config/categories.yml for index-v2"""
+    import yaml
+
+    if categories is None:
+        categories = load_categories()
+
+    # Also collect categories from all app metadata
+    all_categories = set(categories)
+    if os.path.exists(METADATA_DIR):
+        for entry in os.listdir(METADATA_DIR):
+            if entry.endswith(".yml"):
+                yml_path = os.path.join(METADATA_DIR, entry)
+                try:
+                    with open(yml_path, "r") as f:
+                        data = yaml.safe_load(f) or {}
+                    cats = data.get("Categories", [])
+                    if isinstance(cats, list):
+                        all_categories.update(cats)
+                    elif cats:
+                        all_categories.add(str(cats))
+                except Exception:
+                    pass
+
+    # Create F-Droid config directory
+    fdroid_config_dir = "/data/repo/config"
+    os.makedirs(fdroid_config_dir, exist_ok=True)
+
+    # Write categories.yml in F-Droid format
+    # Format: category_id: {name: {locale: name}, description: {locale: desc}}
+    categories_yml = {}
+    for cat in all_categories:
+        if cat:
+            categories_yml[cat] = {
+                "name": {"en-US": cat}
+            }
+
+    categories_path = os.path.join(fdroid_config_dir, "categories.yml")
+    with open(categories_path, "w") as f:
+        yaml.dump(categories_yml, f, default_flow_style=False, allow_unicode=True)
+
+    print(f"[fdroid] Synced {len(categories_yml)} categories to {categories_path}")
 
 
 def require_api_key(f):
@@ -306,6 +352,9 @@ def check_virustotal_safety(apk_path, max_malicious=0, max_suspicious=2):
 def run_fdroid_update():
     """Run fdroid update command"""
     try:
+        # Sync categories to F-Droid config before update
+        sync_categories_to_fdroid()
+
         print("[fdroid] Running fdroid update --create-metadata --verbose")
         result = subprocess.run(
             ["fdroid", "update", "--create-metadata", "--verbose"],
@@ -1512,6 +1561,432 @@ def api_search_playstore():
 
     except Exception as e:
         return jsonify({"error": f"Search failed: {str(e)}"}), 500
+
+
+# =============================================================================
+# PWA to APK Conversion (Bubblewrap)
+# =============================================================================
+
+PWA_BUILDS_DIR = "/data/pwa-builds"
+PWA_KEYSTORE_PATH = os.environ.get("PWA_KEYSTORE_PATH", "/data/config/pwa-keystore.p12")
+PWA_KEYSTORE_PASSWORD = os.environ.get("PWA_KEYSTORE_PASSWORD", "edutab")
+PWA_KEYSTORE_ALIAS = os.environ.get("PWA_KEYSTORE_ALIAS", "pwa-key")
+
+
+def fetch_pwa_manifest(url):
+    """
+    Fetch and parse a PWA manifest from a URL.
+    First fetches the HTML page to find the manifest link, then fetches the manifest.
+    Returns (manifest_dict, manifest_url, error_message)
+    """
+    try:
+        from bs4 import BeautifulSoup
+        from urllib.parse import urljoin, urlparse
+
+        # Fetch the page
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 Chrome/91.0.4472.120 Mobile Safari/537.36"
+        }
+        response = requests.get(url, headers=headers, timeout=30, allow_redirects=True)
+        response.raise_for_status()
+
+        # Parse HTML to find manifest link
+        soup = BeautifulSoup(response.text, "html.parser")
+        manifest_link = soup.find("link", rel="manifest")
+
+        if not manifest_link or not manifest_link.get("href"):
+            # Try common manifest paths
+            common_paths = ["/manifest.json", "/manifest.webmanifest", "/site.webmanifest"]
+            for path in common_paths:
+                try:
+                    manifest_url = urljoin(url, path)
+                    manifest_response = requests.get(manifest_url, headers=headers, timeout=10)
+                    if manifest_response.status_code == 200:
+                        manifest = manifest_response.json()
+                        return manifest, manifest_url, None
+                except Exception:
+                    continue
+            return None, None, "No manifest link found in page and no common manifest paths work"
+
+        # Get manifest URL
+        manifest_href = manifest_link.get("href")
+        manifest_url = urljoin(url, manifest_href)
+
+        # Fetch manifest
+        manifest_response = requests.get(manifest_url, headers=headers, timeout=10)
+        manifest_response.raise_for_status()
+        manifest = manifest_response.json()
+
+        return manifest, manifest_url, None
+
+    except requests.exceptions.RequestException as e:
+        return None, None, f"Failed to fetch URL: {str(e)}"
+    except json.JSONDecodeError as e:
+        return None, None, f"Invalid manifest JSON: {str(e)}"
+    except Exception as e:
+        return None, None, f"Error fetching manifest: {str(e)}"
+
+
+def generate_package_id(name, url):
+    """Generate a valid Android package ID from PWA name and URL"""
+    import re
+    from urllib.parse import urlparse
+
+    # Extract domain from URL
+    parsed = urlparse(url)
+    domain = parsed.netloc.replace("www.", "")
+
+    # Reverse domain notation
+    domain_parts = domain.split(".")
+    domain_parts.reverse()
+
+    # Clean the name for package ID
+    clean_name = re.sub(r"[^a-zA-Z0-9]", "", name.lower())
+    if not clean_name:
+        clean_name = "pwa"
+
+    # Build package ID
+    package_parts = []
+    for part in domain_parts:
+        clean_part = re.sub(r"[^a-zA-Z0-9]", "", part.lower())
+        if clean_part and not clean_part[0].isdigit():
+            package_parts.append(clean_part)
+
+    if not package_parts:
+        package_parts = ["nl", "edutab", "pwa"]
+
+    package_parts.append(clean_name)
+
+    return ".".join(package_parts)
+
+
+def ensure_pwa_keystore():
+    """Ensure PWA signing keystore exists, create if not"""
+    if os.path.exists(PWA_KEYSTORE_PATH):
+        return True, None
+
+    try:
+        os.makedirs(os.path.dirname(PWA_KEYSTORE_PATH), exist_ok=True)
+
+        # Generate a new keystore using keytool
+        result = subprocess.run([
+            "keytool", "-genkeypair",
+            "-alias", PWA_KEYSTORE_ALIAS,
+            "-keyalg", "RSA",
+            "-keysize", "2048",
+            "-validity", "10000",
+            "-keystore", PWA_KEYSTORE_PATH,
+            "-storepass", PWA_KEYSTORE_PASSWORD,
+            "-keypass", PWA_KEYSTORE_PASSWORD,
+            "-dname", "CN=EduTab PWA, OU=PWA, O=EduTab, L=Netherlands, ST=NL, C=NL",
+            "-storetype", "PKCS12"
+        ], capture_output=True, text=True, timeout=30)
+
+        if result.returncode != 0:
+            return False, f"Failed to create keystore: {result.stderr}"
+
+        print(f"[pwa] Created new PWA keystore at {PWA_KEYSTORE_PATH}")
+        return True, None
+
+    except Exception as e:
+        return False, f"Error creating keystore: {str(e)}"
+
+
+def build_pwa_apk(manifest_url, package_id, app_name, signing_key_config):
+    """
+    Build APK from PWA using Bubblewrap.
+    Returns (apk_path, error_message)
+    """
+    build_id = f"pwa-{int(time.time())}"
+    work_dir = os.path.join(PWA_BUILDS_DIR, build_id)
+
+    try:
+        os.makedirs(work_dir, exist_ok=True)
+        print(f"[pwa] Building PWA APK in {work_dir}")
+        print(f"[pwa] Manifest URL: {manifest_url}")
+        print(f"[pwa] Package ID: {package_id}")
+
+        # Create twa-manifest.json for Bubblewrap
+        twa_manifest = {
+            "packageId": package_id,
+            "host": manifest_url.split("/")[2] if "/" in manifest_url else manifest_url,
+            "name": app_name,
+            "launcherName": app_name[:12] if len(app_name) > 12 else app_name,
+            "display": "standalone",
+            "themeColor": "#FFFFFF",
+            "navigationColor": "#FFFFFF",
+            "navigationColorDark": "#000000",
+            "navigationDividerColor": "#FFFFFF",
+            "navigationDividerColorDark": "#000000",
+            "backgroundColor": "#FFFFFF",
+            "enableNotifications": True,
+            "startUrl": "/",
+            "iconUrl": "",
+            "maskableIconUrl": "",
+            "monochromeIconUrl": "",
+            "shortcuts": [],
+            "signingKey": {
+                "path": signing_key_config["path"],
+                "alias": signing_key_config["alias"]
+            },
+            "appVersionCode": 1,
+            "appVersionName": "1.0.0",
+            "splashScreenFadeOutDuration": 300,
+            "enableSiteSettingsShortcut": True,
+            "isChromeOSOnly": False,
+            "orientation": "default",
+            "fingerprints": []
+        }
+
+        twa_manifest_path = os.path.join(work_dir, "twa-manifest.json")
+        with open(twa_manifest_path, "w") as f:
+            json.dump(twa_manifest, f, indent=2)
+
+        # Set environment for Bubblewrap
+        env = os.environ.copy()
+        env["BUBBLEWRAP_KEYSTORE_PASSWORD"] = signing_key_config["password"]
+        env["JAVA_HOME"] = "/usr/lib/jvm/java-17-openjdk-amd64"
+
+        # Initialize Bubblewrap project
+        print(f"[pwa] Running bubblewrap init...")
+        init_result = subprocess.run(
+            ["bubblewrap", "init", "--manifest", manifest_url],
+            cwd=work_dir,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            input="y\n" * 10  # Auto-accept prompts
+        )
+
+        if init_result.returncode != 0:
+            print(f"[pwa] Bubblewrap init output: {init_result.stdout}")
+            print(f"[pwa] Bubblewrap init error: {init_result.stderr}")
+            # Don't fail yet - sometimes init has warnings but still works
+
+        # Build the APK
+        print(f"[pwa] Running bubblewrap build...")
+        build_result = subprocess.run(
+            ["bubblewrap", "build",
+             "--signingKeyPath", signing_key_config["path"],
+             "--signingKeyAlias", signing_key_config["alias"]],
+            cwd=work_dir,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=300,
+            input=f"{signing_key_config['password']}\n{signing_key_config['password']}\n"
+        )
+
+        if build_result.returncode != 0:
+            print(f"[pwa] Bubblewrap build output: {build_result.stdout}")
+            print(f"[pwa] Bubblewrap build error: {build_result.stderr}")
+            return None, f"Bubblewrap build failed: {build_result.stderr or build_result.stdout}"
+
+        # Find the generated APK
+        apk_patterns = [
+            os.path.join(work_dir, "app-release-signed.apk"),
+            os.path.join(work_dir, "app-release-unsigned.apk"),
+            os.path.join(work_dir, "*.apk"),
+        ]
+
+        apk_path = None
+        for pattern in apk_patterns:
+            if "*" in pattern:
+                matches = glob.glob(pattern)
+                if matches:
+                    apk_path = matches[0]
+                    break
+            elif os.path.exists(pattern):
+                apk_path = pattern
+                break
+
+        if not apk_path:
+            return None, f"No APK file generated. Build output: {build_result.stdout}"
+
+        print(f"[pwa] APK generated: {apk_path}")
+        return apk_path, None
+
+    except subprocess.TimeoutExpired:
+        return None, "Bubblewrap build timed out"
+    except Exception as e:
+        return None, f"Build error: {str(e)}"
+
+
+@app.route("/api/pwa/manifest", methods=["POST"])
+@require_api_key
+def api_fetch_pwa_manifest():
+    """
+    Fetch and parse a PWA manifest from a URL.
+
+    Request body:
+    {
+        "url": "https://example.com"
+    }
+
+    Returns manifest info including name, icons, colors, etc.
+    """
+    data = request.get_json()
+    if not data or "url" not in data:
+        return jsonify({"error": "URL required"}), 400
+
+    url = data["url"].strip()
+    if not url.startswith("http"):
+        url = "https://" + url
+
+    manifest, manifest_url, error = fetch_pwa_manifest(url)
+
+    if error:
+        return jsonify({"error": error}), 400
+
+    # Extract useful info from manifest
+    result = {
+        "manifest_url": manifest_url,
+        "name": manifest.get("name") or manifest.get("short_name") or "PWA App",
+        "short_name": manifest.get("short_name") or manifest.get("name") or "PWA",
+        "description": manifest.get("description", ""),
+        "start_url": manifest.get("start_url", "/"),
+        "display": manifest.get("display", "standalone"),
+        "theme_color": manifest.get("theme_color", "#FFFFFF"),
+        "background_color": manifest.get("background_color", "#FFFFFF"),
+        "icons": manifest.get("icons", []),
+        "suggested_package_id": generate_package_id(
+            manifest.get("short_name") or manifest.get("name") or "pwa",
+            url
+        )
+    }
+
+    # Find best icon
+    icons = manifest.get("icons", [])
+    if icons:
+        # Prefer larger icons
+        sorted_icons = sorted(icons, key=lambda i: int(i.get("sizes", "0x0").split("x")[0]), reverse=True)
+        if sorted_icons:
+            result["best_icon"] = sorted_icons[0]
+
+    return jsonify(result)
+
+
+@app.route("/api/pwa/build", methods=["POST"])
+@require_api_key
+def api_build_pwa():
+    """
+    Build an APK from a PWA URL and add it to the repository.
+
+    Request body:
+    {
+        "url": "https://example.com",
+        "name": "My PWA App",  // optional, fetched from manifest if not provided
+        "package_id": "com.example.pwa"  // optional, generated if not provided
+    }
+    """
+    data = request.get_json()
+    if not data or "url" not in data:
+        return jsonify({"error": "URL required"}), 400
+
+    url = data["url"].strip()
+    if not url.startswith("http"):
+        url = "https://" + url
+
+    # Fetch manifest first
+    manifest, manifest_url, error = fetch_pwa_manifest(url)
+    if error:
+        return jsonify({"error": f"Failed to fetch manifest: {error}"}), 400
+
+    # Get app name
+    app_name = data.get("name") or manifest.get("name") or manifest.get("short_name") or "PWA App"
+
+    # Get or generate package ID
+    package_id = data.get("package_id")
+    if not package_id:
+        package_id = generate_package_id(
+            manifest.get("short_name") or manifest.get("name") or "pwa",
+            url
+        )
+
+    # Validate package ID format
+    import re
+    if not re.match(r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$", package_id):
+        return jsonify({
+            "error": "Invalid package ID format",
+            "hint": "Package ID must be like 'com.example.app' with lowercase letters, numbers, and underscores"
+        }), 400
+
+    # Ensure keystore exists
+    keystore_ok, keystore_error = ensure_pwa_keystore()
+    if not keystore_ok:
+        return jsonify({"error": f"Keystore error: {keystore_error}"}), 500
+
+    signing_config = {
+        "path": PWA_KEYSTORE_PATH,
+        "alias": PWA_KEYSTORE_ALIAS,
+        "password": PWA_KEYSTORE_PASSWORD
+    }
+
+    # Build APK
+    apk_path, build_error = build_pwa_apk(manifest_url, package_id, app_name, signing_config)
+    if build_error:
+        return jsonify({"error": build_error}), 500
+
+    # Validate the generated APK
+    is_valid, validation_error = validate_apk_for_fdroid(apk_path)
+    if not is_valid:
+        os.remove(apk_path)
+        return jsonify({
+            "error": "Generated APK validation failed",
+            "details": validation_error
+        }), 500
+
+    # Import APK to repository
+    result = import_apk_to_repo(apk_path, scan_virustotal=False)
+
+    if result["success"]:
+        # Update metadata with PWA info
+        try:
+            metadata = {
+                "name": app_name,
+                "summary": manifest.get("description", f"PWA wrapper for {url}")[:80],
+                "description": manifest.get("description", f"This app is a PWA (Progressive Web App) wrapper for {url}"),
+                "webSite": url,
+                "categories": ["PWA"]
+            }
+
+            # Update metadata directory
+            locale_dir = os.path.join(METADATA_DIR, package_id, "en-US")
+            os.makedirs(locale_dir, exist_ok=True)
+
+            with open(os.path.join(locale_dir, "title.txt"), "w") as f:
+                f.write(app_name)
+            with open(os.path.join(locale_dir, "summary.txt"), "w") as f:
+                f.write(metadata["summary"])
+            with open(os.path.join(locale_dir, "full_description.txt"), "w") as f:
+                f.write(metadata["description"])
+
+            # Write yml metadata
+            import yaml
+            yml_path = os.path.join(METADATA_DIR, f"{package_id}.yml")
+            yml_data = {
+                "Categories": ["PWA"],
+                "WebSite": url,
+                "AuthorName": "PWA Builder"
+            }
+            with open(yml_path, "w") as f:
+                yaml.dump(yml_data, f, default_flow_style=False)
+
+            # Re-run fdroid update
+            run_fdroid_update()
+
+        except Exception as e:
+            print(f"[pwa] Warning: Failed to update metadata: {e}")
+
+        result["pwa_info"] = {
+            "name": app_name,
+            "url": url,
+            "manifest_url": manifest_url,
+            "package_id": package_id
+        }
+
+    return jsonify(result)
 
 
 if __name__ == "__main__":
