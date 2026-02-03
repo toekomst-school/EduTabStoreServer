@@ -56,6 +56,24 @@ PYEOF
     fi
 }
 
+# Copy static assets to repo
+copy_static_assets() {
+    echo "Copying static assets..."
+    mkdir -p "$REPO_DIR/repo"
+
+    # Copy index.html if it exists
+    if [ -f "/repo-index.html" ]; then
+        cp /repo-index.html "$REPO_DIR/repo/index.html"
+        echo "Copied repo index.html"
+    fi
+
+    # Copy icon if it exists
+    if [ -f "/edutab-icon.png" ]; then
+        cp /edutab-icon.png "$REPO_DIR/repo/edutab-icon.png"
+        echo "Copied edutab-icon.png"
+    fi
+}
+
 # Initialize repo if not already done
 init_repo() {
     if [ ! -f "$REPO_DIR/config.yml" ] && [ ! -L "$REPO_DIR/config.yml" ]; then
@@ -90,6 +108,9 @@ init_repo() {
             ln -s "$CONFIG_FILE" "$REPO_DIR/config.yml"
         fi
     fi
+
+    # Copy static assets
+    copy_static_assets
 
     # Always apply env config on startup
     apply_env_config

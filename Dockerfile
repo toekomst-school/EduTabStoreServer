@@ -50,6 +50,8 @@ COPY nginx.coolify.conf /etc/nginx/sites-available/default
 COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 COPY entrypoint.sh /entrypoint.sh
 COPY landing.html /data/landing.html
+COPY repo-index.html /repo-index.html
+COPY edutab-icon.png /edutab-icon.png
 RUN chmod +x /entrypoint.sh
 
 # Remove default nginx site

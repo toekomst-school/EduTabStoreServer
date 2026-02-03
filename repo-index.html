@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EdutabStore - Educational App Repository</title>
+    <link rel="icon" type="image/png" href="edutab-icon.png">
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: #f9fafb;
+            min-height: 100vh;
+            color: #111827;
+            line-height: 1.5;
+        }
+
+        /* Header */
+        .header {
+            background: #1f2937;
+            padding: 24px 0;
+        }
+
+        .header-content {
+            max-width: 1024px;
+            margin: 0 auto;
+            padding: 0 24px;
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .logo-text {
+            font-size: 24px;
+            font-weight: 700;
+            color: white;
+        }
+
+        .tagline {
+            color: #9ca3af;
+            font-size: 14px;
+            margin-left: auto;
+        }
+
+        /* Hero */
+        .hero {
+            background: linear-gradient(135deg, #1f2937 0%, #374151 100%);
+            padding: 64px 24px;
+            text-align: center;
+        }
+
+        .hero h1 {
+            color: white;
+            font-size: 36px;
+            font-weight: 700;
+            margin-bottom: 16px;
+        }
+
+        .hero p {
+            color: #d1d5db;
+            font-size: 18px;
+            max-width: 600px;
+            margin: 0 auto 32px;
+        }
+
+        .hero-buttons {
+            display: flex;
+            gap: 16px;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+
+        /* Buttons */
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            text-decoration: none;
+            transition: all 0.2s;
+            gap: 8px;
+        }
+
+        .btn-primary {
+            background: #2563eb;
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: #1d4ed8;
+        }
+
+        .btn-secondary {
+            background: white;
+            color: #374151;
+            border: 1px solid #d1d5db;
+        }
+
+        .btn-secondary:hover {
+            background: #f3f4f6;
+        }
+
+        /* Main content */
+        .main {
+            max-width: 1024px;
+            margin: 0 auto;
+            padding: 48px 24px;
+        }
+
+        /* Cards */
+        .card {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1), 0 1px 2px rgba(0, 0, 0, 0.06);
+            padding: 24px;
+            margin-bottom: 24px;
+        }
+
+        .card h2 {
+            font-size: 18px;
+            font-weight: 600;
+            color: #111827;
+            margin-bottom: 16px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .card h2 svg {
+            color: #2563eb;
+        }
+
+        /* Steps */
+        .steps {
+            counter-reset: step;
+        }
+
+        .step {
+            display: flex;
+            gap: 16px;
+            padding: 16px 0;
+            border-bottom: 1px solid #e5e7eb;
+        }
+
+        .step:last-child {
+            border-bottom: none;
+        }
+
+        .step-number {
+            width: 32px;
+            height: 32px;
+            background: #eff6ff;
+            color: #2563eb;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 600;
+            font-size: 14px;
+            flex-shrink: 0;
+        }
+
+        .step-content h3 {
+            font-size: 16px;
+            font-weight: 600;
+            color: #111827;
+            margin-bottom: 4px;
+        }
+
+        .step-content p {
+            color: #6b7280;
+            font-size: 14px;
+        }
+
+        /* Features grid */
+        .features {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 24px;
+            margin-bottom: 24px;
+        }
+
+        .feature {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+            padding: 24px;
+        }
+
+        .feature-icon {
+            width: 48px;
+            height: 48px;
+            background: #eff6ff;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 16px;
+        }
+
+        .feature-icon svg {
+            width: 24px;
+            height: 24px;
+            color: #2563eb;
+        }
+
+        .feature h3 {
+            font-size: 16px;
+            font-weight: 600;
+            color: #111827;
+            margin-bottom: 8px;
+        }
+
+        .feature p {
+            color: #6b7280;
+            font-size: 14px;
+        }
+
+        /* Code block */
+        .code-block {
+            background: #1f2937;
+            border-radius: 8px;
+            padding: 16px;
+            margin-top: 12px;
+            overflow-x: auto;
+        }
+
+        .code-block code {
+            color: #e5e7eb;
+            font-family: 'SF Mono', 'Consolas', 'Monaco', monospace;
+            font-size: 14px;
+        }
+
+        /* Footer */
+        .footer {
+            background: #1f2937;
+            padding: 32px 24px;
+            text-align: center;
+        }
+
+        .footer p {
+            color: #9ca3af;
+            font-size: 14px;
+        }
+
+        .footer a {
+            color: #60a5fa;
+            text-decoration: none;
+        }
+
+        .footer a:hover {
+            text-decoration: underline;
+        }
+
+        /* Badge */
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            padding: 4px 12px;
+            background: #dcfce7;
+            color: #166534;
+            border-radius: 9999px;
+            font-size: 12px;
+            font-weight: 500;
+            gap: 4px;
+        }
+
+        .badge svg {
+            width: 14px;
+            height: 14px;
+        }
+
+        /* Responsive */
+        @media (max-width: 640px) {
+            .header-content {
+                flex-direction: column;
+                text-align: center;
+            }
+
+            .tagline {
+                margin-left: 0;
+            }
+
+            .hero h1 {
+                font-size: 28px;
+            }
+
+            .hero p {
+                font-size: 16px;
+            }
+
+            .hero-buttons {
+                flex-direction: column;
+                align-items: center;
+            }
+
+            .btn {
+                width: 100%;
+                max-width: 280px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <div class="header-content">
+            <div class="logo">
+                <svg width="40" height="40" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <rect x="3" y="3" width="12" height="12" rx="3" fill="#4CAF50"/>
+                    <rect x="17" y="3" width="12" height="12" rx="3" fill="#66BB6A"/>
+                    <rect x="3" y="17" width="12" height="12" rx="3" fill="#81C784"/>
+                    <rect x="17" y="17" width="12" height="12" rx="3" fill="#A5D6A7"/>
+                </svg>
+                <span class="logo-text">EdutabStore</span>
+            </div>
+            <span class="tagline">Educational apps for tablets</span>
+        </div>
+    </header>
+
+    <section class="hero">
+        <h1>Your Educational App Repository</h1>
+        <p>Curated educational apps for tablets, managed and distributed through your own private F-Droid repository.</p>
+        <div class="hero-buttons">
+            <a href="fdroidrepos://store.edutab.nl/repo?fingerprint=" class="btn btn-primary">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                    <polyline points="7 10 12 15 17 10"/>
+                    <line x1="12" y1="15" x2="12" y2="3"/>
+                </svg>
+                Add Repository
+            </a>
+            <a href="/repo/" class="btn btn-secondary">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="3" y="3" width="7" height="7"/>
+                    <rect x="14" y="3" width="7" height="7"/>
+                    <rect x="14" y="14" width="7" height="7"/>
+                    <rect x="3" y="14" width="7" height="7"/>
+                </svg>
+                Browse Apps
+            </a>
+        </div>
+    </section>
+
+    <main class="main">
+        <div class="features">
+            <div class="feature">
+                <div class="feature-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+                    </svg>
+                </div>
+                <h3>Safe & Verified</h3>
+                <p>All apps are scanned with VirusTotal before being added to the repository.</p>
+            </div>
+            <div class="feature">
+                <div class="feature-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>
+                        <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
+                    </svg>
+                </div>
+                <h3>Educational Focus</h3>
+                <p>Curated apps designed for learning, creativity, and productivity in education.</p>
+            </div>
+            <div class="feature">
+                <div class="feature-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="10"/>
+                        <polyline points="12 6 12 12 16 14"/>
+                    </svg>
+                </div>
+                <h3>Auto Updates</h3>
+                <p>Apps update automatically in the background, keeping devices secure and up-to-date.</p>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="10"/>
+                    <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/>
+                    <line x1="12" y1="17" x2="12.01" y2="17"/>
+                </svg>
+                How to Install
+            </h2>
+            <div class="steps">
+                <div class="step">
+                    <div class="step-number">1</div>
+                    <div class="step-content">
+                        <h3>Get the EdutabStore App</h3>
+                        <p>Download and install the EdutabStore client app on your tablet.</p>
+                    </div>
+                </div>
+                <div class="step">
+                    <div class="step-number">2</div>
+                    <div class="step-content">
+                        <h3>Add This Repository</h3>
+                        <p>Tap the "Add Repository" button above, or manually add the repository URL:</p>
+                        <div class="code-block">
+                            <code>https://store.edutab.nl/repo</code>
+                        </div>
+                    </div>
+                </div>
+                <div class="step">
+                    <div class="step-number">3</div>
+                    <div class="step-content">
+                        <h3>Browse & Install Apps</h3>
+                        <p>Explore the available educational apps and install them with one tap.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M10.5 19.5h3m-6.75 2.25h10.5a2.25 2.25 0 0 0 2.25-2.25v-15a2.25 2.25 0 0 0-2.25-2.25H6.75A2.25 2.25 0 0 0 4.5 4.5v15a2.25 2.25 0 0 0 2.25 2.25Z"/>
+                </svg>
+                Repository Status
+            </h2>
+            <p style="color: #6b7280; margin-bottom: 16px;">This repository is managed by Edutab for educational tablet deployments.</p>
+            <span class="badge">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+                    <polyline points="22 4 12 14.01 9 11.01"/>
+                </svg>
+                Repository Active
+            </span>
+        </div>
+    </main>
+
+    <footer class="footer">
+        <p>Powered by <a href="https://f-droid.org" target="_blank">F-Droid</a> &bull; Managed by <a href="https://edutab.nl" target="_blank">Edutab</a></p>
+    </footer>
+</body>
+</html>
