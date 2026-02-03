@@ -1809,6 +1809,24 @@ def ensure_pwa_keystore():
         return False, f"Error creating keystore: {str(e)}"
 
 
+def setup_bubblewrap_config():
+    """Create bubblewrap config file to avoid interactive prompts"""
+    config_dir = os.path.expanduser("~/.aspect")
+    os.makedirs(config_dir, exist_ok=True)
+
+    config_path = os.path.join(config_dir, "aspect-config.json")
+    config = {
+        "jdkPath": "/usr/lib/jvm/java-17-openjdk-amd64",
+        "androidSdkPath": "/opt/android-sdk"
+    }
+
+    with open(config_path, "w") as f:
+        json.dump(config, f, indent=2)
+
+    print(f"[pwa] Bubblewrap config written to {config_path}")
+    return config_path
+
+
 def build_pwa_apk(manifest_url, package_id, app_name, signing_key_config):
     """
     Build APK from PWA using Bubblewrap.
@@ -1823,48 +1841,16 @@ def build_pwa_apk(manifest_url, package_id, app_name, signing_key_config):
         print(f"[pwa] Manifest URL: {manifest_url}")
         print(f"[pwa] Package ID: {package_id}")
 
-        # Create twa-manifest.json for Bubblewrap
-        twa_manifest = {
-            "packageId": package_id,
-            "host": manifest_url.split("/")[2] if "/" in manifest_url else manifest_url,
-            "name": app_name,
-            "launcherName": app_name[:12] if len(app_name) > 12 else app_name,
-            "display": "standalone",
-            "themeColor": "#FFFFFF",
-            "navigationColor": "#FFFFFF",
-            "navigationColorDark": "#000000",
-            "navigationDividerColor": "#FFFFFF",
-            "navigationDividerColorDark": "#000000",
-            "backgroundColor": "#FFFFFF",
-            "enableNotifications": True,
-            "startUrl": "/",
-            "iconUrl": "",
-            "maskableIconUrl": "",
-            "monochromeIconUrl": "",
-            "shortcuts": [],
-            "signingKey": {
-                "path": signing_key_config["path"],
-                "alias": signing_key_config["alias"]
-            },
-            "appVersionCode": 1,
-            "appVersionName": "1.0.0",
-            "splashScreenFadeOutDuration": 300,
-            "enableSiteSettingsShortcut": True,
-            "isChromeOSOnly": False,
-            "orientation": "default",
-            "fingerprints": []
-        }
-
-        twa_manifest_path = os.path.join(work_dir, "twa-manifest.json")
-        with open(twa_manifest_path, "w") as f:
-            json.dump(twa_manifest, f, indent=2)
+        # Setup bubblewrap config to avoid interactive prompts
+        setup_bubblewrap_config()
 
         # Set environment for Bubblewrap
         env = os.environ.copy()
-        env["BUBBLEWRAP_KEYSTORE_PASSWORD"] = signing_key_config["password"]
         env["JAVA_HOME"] = "/usr/lib/jvm/java-17-openjdk-amd64"
+        env["ANDROID_HOME"] = "/opt/android-sdk"
+        env["ANDROID_SDK_ROOT"] = "/opt/android-sdk"
 
-        # Initialize Bubblewrap project
+        # Initialize Bubblewrap project with manifest
         print(f"[pwa] Running bubblewrap init...")
         init_result = subprocess.run(
             ["bubblewrap", "init", "--manifest", manifest_url],
@@ -1872,8 +1858,12 @@ def build_pwa_apk(manifest_url, package_id, app_name, signing_key_config):
             env=env,
             capture_output=True,
             text=True,
-            timeout=120,
-            input="y\n" * 10  # Auto-accept prompts
+            timeout=300,
+            input="\n".join([
+                "/usr/lib/jvm/java-17-openjdk-amd64",  # JDK path
+                "/opt/android-sdk",  # Android SDK path
+                "y",  # Accept
+            ] + ["y"] * 10)  # Accept any additional prompts
         )
 
         if init_result.returncode != 0:
@@ -1883,21 +1873,28 @@ def build_pwa_apk(manifest_url, package_id, app_name, signing_key_config):
 
         # Build the APK
         print(f"[pwa] Running bubblewrap build...")
+
+        # Set keystore password in environment
+        build_env = env.copy()
+        build_env["BUBBLEWRAP_KEYSTORE_PASSWORD"] = signing_key_config["password"]
+        build_env["BUBBLEWRAP_KEY_PASSWORD"] = signing_key_config["password"]
+
         build_result = subprocess.run(
             ["bubblewrap", "build",
              "--signingKeyPath", signing_key_config["path"],
              "--signingKeyAlias", signing_key_config["alias"]],
             cwd=work_dir,
-            env=env,
+            env=build_env,
             capture_output=True,
             text=True,
-            timeout=300,
+            timeout=600,  # 10 minutes for first build (downloads Gradle etc)
             input=f"{signing_key_config['password']}\n{signing_key_config['password']}\n"
         )
 
+        print(f"[pwa] Bubblewrap build stdout: {build_result.stdout[:2000] if build_result.stdout else 'none'}")
+        print(f"[pwa] Bubblewrap build stderr: {build_result.stderr[:2000] if build_result.stderr else 'none'}")
+
         if build_result.returncode != 0:
-            print(f"[pwa] Bubblewrap build output: {build_result.stdout}")
-            print(f"[pwa] Bubblewrap build error: {build_result.stderr}")
             return None, f"Bubblewrap build failed: {build_result.stderr or build_result.stdout}"
 
         # Find the generated APK
