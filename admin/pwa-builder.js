@@ -27,7 +27,7 @@ async function buildPwaApk(manifestUrl, outputDir, signingConfig) {
 
         // Fetch and create TWA manifest
         console.log('[pwa-builder] Fetching manifest...');
-        const twaManifest = await TwaManifest.fromWebManifestUrl(manifestUrl);
+        const twaManifest = await TwaManifest.fromWebManifest(manifestUrl);
 
         console.log(`[pwa-builder] App name: ${twaManifest.name}`);
         console.log(`[pwa-builder] Package: ${twaManifest.packageId}`);
