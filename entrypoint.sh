@@ -50,8 +50,9 @@ with open(config_file, 'r') as f:
 PYEOF
 
         # Show current config values
-        echo "Config values:"
-        grep -E "^repo_(name|url|description):" "$CONFIG_FILE" || true
+        echo "Config values from file:"
+        grep -E "^repo_(name|url|icon):" "$CONFIG_FILE" || true
+        echo "REPO_ICON env var: $REPO_ICON"
 
         # Trigger index rebuild
         echo "Rebuilding repository index..."
