@@ -10,7 +10,7 @@ const fs = require('fs');
 async function buildPwaApk(manifestUrl, outputDir, signingConfig) {
     // Dynamic import for ESM module
     const bubblewrap = await import('@bubblewrap/core');
-    const { TwaManifest, TwaGenerator, GradleWrapper, AndroidSdkTools, Config, ConsoleLog } = bubblewrap;
+    const { TwaManifest, TwaGenerator, GradleWrapper, AndroidSdkTools, JdkHelper, Config, ConsoleLog } = bubblewrap;
 
     const JDK_PATH = process.env.JAVA_HOME || '/usr/lib/jvm/java-17-openjdk-amd64';
     const ANDROID_SDK_PATH = process.env.ANDROID_HOME || '/opt/android-sdk';
@@ -21,9 +21,11 @@ async function buildPwaApk(manifestUrl, outputDir, signingConfig) {
     console.log(`[pwa-builder] Android SDK: ${ANDROID_SDK_PATH}`);
 
     try {
-        // Create config
+        // Create config, JdkHelper, and AndroidSdkTools properly
         const config = new Config(JDK_PATH, ANDROID_SDK_PATH);
         const log = new ConsoleLog('pwa-builder');
+        const jdkHelper = new JdkHelper(process, config);
+        const androidSdkTools = await AndroidSdkTools.create(process, config, jdkHelper, log);
 
         // Fetch and create TWA manifest
         console.log('[pwa-builder] Fetching manifest...');
@@ -52,8 +54,7 @@ async function buildPwaApk(manifestUrl, outputDir, signingConfig) {
 
         // Build the APK using Gradle
         console.log('[pwa-builder] Building APK with Gradle...');
-        const androidSdk = new AndroidSdkTools(process, config, log);
-        const gradleWrapper = new GradleWrapper(process, androidSdk, outputDir);
+        const gradleWrapper = new GradleWrapper(process, androidSdkTools, outputDir);
 
         await gradleWrapper.assembleRelease();
 
@@ -93,9 +94,8 @@ async function buildPwaApk(manifestUrl, outputDir, signingConfig) {
         if (signingConfig && apkPath.includes('unsigned')) {
             console.log('[pwa-builder] Signing APK...');
             const signedApkPath = path.join(outputDir, 'app-release-signed.apk');
-            const androidSdk = new AndroidSdkTools(process, config, log);
 
-            await androidSdk.apksigner(
+            await androidSdkTools.apksigner(
                 apkPath,
                 signedApkPath,
                 signingConfig.path,
