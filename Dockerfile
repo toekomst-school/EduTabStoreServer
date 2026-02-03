@@ -41,11 +41,12 @@ RUN yes | sdkmanager --licenses && \
 RUN wget -q https://github.com/EFForg/apkeep/releases/download/0.18.0/apkeep-x86_64-unknown-linux-gnu -O /usr/local/bin/apkeep && \
     chmod +x /usr/local/bin/apkeep
 
-# Install Node.js and Gradle for Bubblewrap
+# Install Node.js, Gradle, and expect for Bubblewrap
 RUN apt-get update && apt-get install -y --no-install-recommends \
     nodejs \
     npm \
     gradle \
+    expect \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Bubblewrap CLI for PWA-to-APK conversion
@@ -71,7 +72,8 @@ RUN mkdir -p /data/repo /data/config /data/unsigned /data/virustotal /data/pwa-b
 
 # Copy admin API and install dependencies
 COPY admin /opt/admin
-RUN pip3 install --no-cache-dir --break-system-packages -r /opt/admin/requirements.txt
+RUN pip3 install --no-cache-dir --break-system-packages -r /opt/admin/requirements.txt && \
+    chmod +x /opt/admin/bubblewrap-init.exp
 
 # Copy configuration files
 COPY nginx.coolify.conf /etc/nginx/sites-available/default

@@ -1863,29 +1863,18 @@ def build_pwa_apk(manifest_url, package_id, app_name, signing_key_config):
             }, f)
         print(f"[pwa] Config written to {config_path}")
 
-        # Initialize Bubblewrap project with manifest
-        print(f"[pwa] Running bubblewrap init...")
-        # Input sequence for Bubblewrap prompts:
-        # 1. "Do you want Bubblewrap to install the JDK?" -> n (use our own)
-        # 2. "Path to your existing JDK 17:" -> path
-        # 3. "Do you want Bubblewrap to install Android SDK?" -> n (use our own)
-        # 4. "Path to your existing Android SDK:" -> path
-        # 5+ Various confirmations -> y
-        init_input = "\n".join([
-            "n",  # Don't install JDK
-            "/usr/lib/jvm/java-17-openjdk-amd64",  # JDK path
-            "n",  # Don't install Android SDK
-            "/opt/android-sdk",  # Android SDK path
-        ] + ["y"] * 20)  # Accept any additional prompts/confirmations
+        # Initialize Bubblewrap project with manifest using expect script
+        # This handles the interactive prompts properly via pseudo-TTY
+        print(f"[pwa] Running bubblewrap init via expect script...")
+        jdk_path = "/usr/lib/jvm/java-17-openjdk-amd64"
+        sdk_path = "/opt/android-sdk"
 
         init_result = subprocess.run(
-            ["bubblewrap", "init", "--manifest", manifest_url],
-            cwd=work_dir,
+            ["/opt/admin/bubblewrap-init.exp", manifest_url, work_dir, jdk_path, sdk_path],
             env=env,
             capture_output=True,
             text=True,
-            timeout=300,
-            input=init_input
+            timeout=300
         )
 
         if init_result.returncode != 0:

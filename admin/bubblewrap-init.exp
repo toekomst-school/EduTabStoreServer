@@ -1,0 +1,54 @@
+#!/usr/bin/expect -f
+# Expect script to handle Bubblewrap interactive prompts
+
+set timeout 300
+set manifest_url [lindex $argv 0]
+set work_dir [lindex $argv 1]
+set jdk_path [lindex $argv 2]
+set sdk_path [lindex $argv 3]
+
+cd $work_dir
+
+spawn bubblewrap init --manifest $manifest_url
+
+# Handle JDK prompt - answer no to install, then provide path
+expect {
+    "Do you want Bubblewrap to install the JDK" {
+        send "n\r"
+        expect "Path to your existing JDK"
+        send "$jdk_path\r"
+        exp_continue
+    }
+    "Do you want Bubblewrap to install the Android SDK" {
+        send "n\r"
+        expect "Path to your existing Android SDK"
+        send "$sdk_path\r"
+        exp_continue
+    }
+    "Do you want to use the above configuration" {
+        send "y\r"
+        exp_continue
+    }
+    "Confirm" {
+        send "y\r"
+        exp_continue
+    }
+    "(Y/n)" {
+        send "y\r"
+        exp_continue
+    }
+    "(y/N)" {
+        send "y\r"
+        exp_continue
+    }
+    eof {
+        # Script finished
+    }
+    timeout {
+        puts "Timeout waiting for prompt"
+        exit 1
+    }
+}
+
+# Wait for process to complete
+wait
