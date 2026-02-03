@@ -52,7 +52,8 @@ async function buildPwaApk(manifestUrl, outputDir, signingConfig) {
 
         // Build the APK using Gradle
         console.log('[pwa-builder] Building APK with Gradle...');
-        const gradleWrapper = new GradleWrapper(process, outputDir);
+        const androidSdk = new AndroidSdkTools(process, config, log);
+        const gradleWrapper = new GradleWrapper(process, androidSdk, outputDir);
 
         await gradleWrapper.assembleRelease();
 
