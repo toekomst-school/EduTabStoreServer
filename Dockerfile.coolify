@@ -44,8 +44,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     expect \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Bubblewrap CLI for PWA-to-APK conversion
-RUN npm install -g @bubblewrap/cli && \
+# Install Bubblewrap core for PWA-to-APK conversion (programmatic API, no interactive prompts)
+RUN npm install -g @bubblewrap/core && \
     mkdir -p /root/.aspect && \
     chmod -R 755 /root/.aspect
 
