@@ -818,7 +818,17 @@ def api_update_metadata(package):
     # Handle categories and other yml fields
     yml_fields = {}
     if "categories" in data:
-        yml_fields["Categories"] = data["categories"]
+        # F-Droid requires Categories to be a YAML list
+        cats = data["categories"]
+        if isinstance(cats, str):
+            # Single category as string -> convert to list
+            cats = [cats] if cats else []
+        elif not isinstance(cats, list):
+            # Other iterable -> convert to list
+            cats = list(cats) if hasattr(cats, '__iter__') else [str(cats)]
+        # Filter out empty strings
+        cats = [c for c in cats if c]
+        yml_fields["Categories"] = cats
         updated_fields.append("categories")
     if "authorName" in data:
         yml_fields["AuthorName"] = data["authorName"]

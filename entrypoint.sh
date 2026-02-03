@@ -41,7 +41,12 @@ config['keystore'] = '/config/keystore.p12'
 with open(config_file, 'w') as f:
     yaml.dump(config, f, default_flow_style=False, allow_unicode=True)
 
-print(f"Updated config: repo_name={config['repo_name']}, repo_url={config['repo_url']}")
+print(f"Config: repo_name={config['repo_name']}, repo_url={config['repo_url']}, repo_icon={config['repo_icon']}")
+
+# Verify write
+with open(config_file, 'r') as f:
+    verify = yaml.safe_load(f)
+    print(f"Verified repo_icon in file: {verify.get('repo_icon', 'NOT SET')}")
 PYEOF
 
         # Show current config values
@@ -70,7 +75,14 @@ copy_static_assets() {
     # Copy icon if it exists
     if [ -f "/edutab-icon.png" ]; then
         cp /edutab-icon.png "$REPO_DIR/repo/edutab-icon.png"
-        echo "Copied edutab-icon.png"
+        echo "Copied edutab-icon.png to $REPO_DIR/repo/edutab-icon.png"
+    fi
+
+    # Verify icon exists
+    if [ -f "$REPO_DIR/repo/edutab-icon.png" ]; then
+        echo "Icon verified at $REPO_DIR/repo/edutab-icon.png"
+    else
+        echo "WARNING: Icon not found at $REPO_DIR/repo/edutab-icon.png"
     fi
 }
 
