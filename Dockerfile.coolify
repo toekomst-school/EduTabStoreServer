@@ -15,6 +15,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     openjdk-17-jdk-headless \
     wget \
     unzip \
+    git \
     nginx \
     supervisor \
     && rm -rf /var/lib/apt/lists/*
