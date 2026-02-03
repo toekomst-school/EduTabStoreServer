@@ -35,16 +35,29 @@ RUN yes | sdkmanager --licenses && \
 RUN wget -q https://github.com/EFForg/apkeep/releases/download/0.18.0/apkeep-x86_64-unknown-linux-gnu -O /usr/local/bin/apkeep && \
     chmod +x /usr/local/bin/apkeep
 
-# Install Node.js for Bubblewrap
+# Install Node.js and Gradle for Bubblewrap
 RUN apt-get update && apt-get install -y --no-install-recommends \
     nodejs \
     npm \
+    gradle \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Bubblewrap CLI for PWA-to-APK conversion
 RUN npm install -g @bubblewrap/cli && \
-    mkdir -p /root/.bubblewrap && \
-    chmod -R 755 /root/.bubblewrap
+    mkdir -p /root/.aspect && \
+    chmod -R 755 /root/.aspect
+
+# Pre-configure Bubblewrap with JDK and SDK paths to avoid interactive prompts
+RUN echo '{"jdkPath":"/usr/lib/jvm/java-17-openjdk-amd64","androidSdkPath":"/opt/android-sdk"}' > /root/.aspect/aspect-config.json
+
+# Pre-download Gradle wrapper (version used by Bubblewrap TWA template)
+ENV GRADLE_USER_HOME=/root/.gradle
+RUN mkdir -p ${GRADLE_USER_HOME}/wrapper/dists && \
+    cd /tmp && \
+    wget -q https://services.gradle.org/distributions/gradle-8.0-bin.zip && \
+    mkdir -p ${GRADLE_USER_HOME}/wrapper/dists/gradle-8.0-bin && \
+    unzip -q gradle-8.0-bin.zip -d ${GRADLE_USER_HOME}/wrapper/dists/gradle-8.0-bin/ && \
+    rm gradle-8.0-bin.zip
 
 # Create directories
 RUN mkdir -p /data/repo /data/config /data/unsigned /data/virustotal /data/pwa-builds /var/log/supervisor

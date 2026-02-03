@@ -1849,6 +1849,7 @@ def build_pwa_apk(manifest_url, package_id, app_name, signing_key_config):
         env["JAVA_HOME"] = "/usr/lib/jvm/java-17-openjdk-amd64"
         env["ANDROID_HOME"] = "/opt/android-sdk"
         env["ANDROID_SDK_ROOT"] = "/opt/android-sdk"
+        env["GRADLE_USER_HOME"] = "/root/.gradle"
 
         # Initialize Bubblewrap project with manifest
         print(f"[pwa] Running bubblewrap init...")
