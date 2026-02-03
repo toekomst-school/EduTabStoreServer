@@ -49,9 +49,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     expect \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Bubblewrap core for PWA-to-APK conversion (programmatic API, no interactive prompts)
-RUN npm install -g @bubblewrap/core && \
-    mkdir -p /root/.aspect && \
+# Create .aspect directory for Bubblewrap config
+RUN mkdir -p /root/.aspect && \
     chmod -R 755 /root/.aspect
 
 # Pre-configure Bubblewrap with JDK and SDK paths to avoid interactive prompts
@@ -73,7 +72,8 @@ RUN mkdir -p /data/repo /data/config /data/unsigned /data/virustotal /data/pwa-b
 # Copy admin API and install dependencies
 COPY admin /opt/admin
 RUN pip3 install --no-cache-dir --break-system-packages -r /opt/admin/requirements.txt && \
-    chmod +x /opt/admin/bubblewrap-init.exp
+    cd /opt/admin && npm install && \
+    chmod +x /opt/admin/pwa-builder.js
 
 # Copy configuration files
 COPY nginx.coolify.conf /etc/nginx/sites-available/default

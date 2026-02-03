@@ -1,0 +1,9 @@
+{
+  "name": "edutabstore-admin",
+  "version": "1.0.0",
+  "private": true,
+  "type": "commonjs",
+  "dependencies": {
+    "@bubblewrap/core": "^1.24.0"
+  }
+}
