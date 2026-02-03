@@ -95,13 +95,14 @@ async function buildPwaApk(manifestUrl, outputDir, signingConfig) {
             console.log('[pwa-builder] Signing APK...');
             const signedApkPath = path.join(outputDir, 'app-release-signed.apk');
 
+            // apksigner(keystore, ksPass, alias, keyPass, input, output)
             await androidSdkTools.apksigner(
-                apkPath,
-                signedApkPath,
-                signingConfig.path,
-                signingConfig.alias,
-                signingConfig.password,
-                signingConfig.password
+                signingConfig.path,      // keystore
+                signingConfig.password,  // ksPass
+                signingConfig.alias,     // alias
+                signingConfig.password,  // keyPass
+                apkPath,                 // input (unsigned APK)
+                signedApkPath            // output (signed APK)
             );
 
             console.log(`[pwa-builder] Signed APK: ${signedApkPath}`);
