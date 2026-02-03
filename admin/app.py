@@ -965,6 +965,118 @@ def api_force_update():
     })
 
 
+@app.route("/api/debug/metadata/<package>", methods=["GET"])
+@require_api_key
+def api_debug_metadata(package):
+    """Debug endpoint to view raw metadata files"""
+    import json as json_lib
+    result = {
+        "package": package,
+        "yml_file": None,
+        "yml_content": None,
+        "locale_files": {},
+        "index_categories": None
+    }
+
+    # Read yml file
+    yml_path = os.path.join(METADATA_DIR, f"{package}.yml")
+    if os.path.exists(yml_path):
+        result["yml_file"] = yml_path
+        with open(yml_path, "r") as f:
+            result["yml_content"] = f.read()
+
+    # Read locale files
+    locale_dir = os.path.join(METADATA_DIR, package, "en-US")
+    if os.path.exists(locale_dir):
+        for filename in os.listdir(locale_dir):
+            filepath = os.path.join(locale_dir, filename)
+            if os.path.isfile(filepath):
+                with open(filepath, "r") as f:
+                    result["locale_files"][filename] = f.read()
+
+    # Check index-v2.json for this package's categories
+    index_path = "/data/repo/repo/index-v2.json"
+    if os.path.exists(index_path):
+        try:
+            with open(index_path, "r") as f:
+                index_data = json_lib.load(f)
+            packages = index_data.get("packages", {})
+            if package in packages:
+                pkg_data = packages[package]
+                if "metadata" in pkg_data:
+                    result["index_categories"] = pkg_data["metadata"].get("categories")
+                else:
+                    # Try versions
+                    versions = pkg_data.get("versions", {})
+                    for v in versions.values():
+                        if "manifest" in v:
+                            result["index_categories"] = v.get("manifest", {}).get("categories")
+                            break
+        except Exception as e:
+            result["index_error"] = str(e)
+
+    return jsonify(result)
+
+
+@app.route("/api/debug/index", methods=["GET"])
+@require_api_key
+def api_debug_index():
+    """Debug endpoint to view index structure and categories"""
+    import json as json_lib
+    result = {
+        "index_v2_exists": False,
+        "index_v1_exists": False,
+        "repo_categories": [],
+        "packages_with_categories": {},
+        "full_package_structure": {}
+    }
+
+    # Check index files exist
+    index_v2_path = "/data/repo/repo/index-v2.json"
+    index_v1_path = "/data/repo/repo/index-v1.jar"
+    result["index_v2_exists"] = os.path.exists(index_v2_path)
+    result["index_v1_exists"] = os.path.exists(index_v1_path)
+
+    if result["index_v2_exists"]:
+        try:
+            with open(index_v2_path, "r") as f:
+                index_data = json_lib.load(f)
+
+            # Get repo-level categories
+            repo = index_data.get("repo", {})
+            result["repo_categories"] = repo.get("categories", [])
+
+            # Check each package for categories
+            packages = index_data.get("packages", {})
+            for pkg_name, pkg_data in packages.items():
+                # Check metadata level
+                metadata = pkg_data.get("metadata", {})
+                cats = metadata.get("categories", [])
+                if cats:
+                    result["packages_with_categories"][pkg_name] = cats
+
+                # Store full structure for first package as example
+                if not result["full_package_structure"]:
+                    result["full_package_structure"] = {
+                        "package": pkg_name,
+                        "keys": list(pkg_data.keys()),
+                        "metadata_keys": list(metadata.keys()) if metadata else [],
+                        "sample_metadata": metadata
+                    }
+
+        except Exception as e:
+            result["error"] = str(e)
+
+    # Also list all metadata yml files
+    result["metadata_files"] = []
+    if os.path.exists(METADATA_DIR):
+        for f in os.listdir(METADATA_DIR):
+            if f.endswith(".yml"):
+                result["metadata_files"].append(f)
+
+    return jsonify(result)
+
+
 @app.route("/api/apps/<package>/virustotal", methods=["GET"])
 @require_api_key
 def api_get_virustotal(package):

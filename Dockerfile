@@ -41,6 +41,17 @@ RUN yes | sdkmanager --licenses && \
 RUN wget -q https://github.com/EFForg/apkeep/releases/download/0.18.0/apkeep-x86_64-unknown-linux-gnu -O /usr/local/bin/apkeep && \
     chmod +x /usr/local/bin/apkeep
 
+# Install Node.js for Bubblewrap
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    nodejs \
+    npm \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Bubblewrap CLI for PWA-to-APK conversion
+RUN npm install -g @nicolo-ribaudo/nicolo-ribaudo-bubblewrap-cli && \
+    mkdir -p /root/.aspect && \
+    chmod -R 755 /root/.aspect
+
 # Create directories
 RUN mkdir -p /data/repo /data/config /data/unsigned /var/log/supervisor && \
     chown -R www-data:www-data /data
