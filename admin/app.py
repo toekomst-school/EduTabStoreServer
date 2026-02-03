@@ -30,22 +30,35 @@ CATEGORIES_FILE = os.path.join(CONFIG_DIR, "categories.json")
 
 
 def load_categories():
-    """Load predefined categories from config file"""
+    """Load predefined categories from config file.
+
+    Returns dict with format:
+    {
+        "CategoryId": {
+            "name": {"en-US": "English Name", "nl": "Dutch Name"},
+            "description": {"en-US": "Description"}  # optional
+        }
+    }
+    """
     if not os.path.exists(CATEGORIES_FILE):
-        return []
+        return {}
     try:
         with open(CATEGORIES_FILE, "r") as f:
             data = json.load(f)
-            return data.get("categories", [])
+            categories = data.get("categories", {})
+            # Migrate old format (list) to new format (dict)
+            if isinstance(categories, list):
+                return {cat: {"name": {"en-US": cat}} for cat in categories}
+            return categories
     except Exception:
-        return []
+        return {}
 
 
 def save_categories(categories):
     """Save predefined categories to config file"""
     os.makedirs(CONFIG_DIR, exist_ok=True)
     with open(CATEGORIES_FILE, "w") as f:
-        json.dump({"categories": categories}, f, indent=2)
+        json.dump({"categories": categories}, f, indent=2, ensure_ascii=False)
     # Also sync to F-Droid repo config
     sync_categories_to_fdroid(categories)
 
@@ -57,8 +70,17 @@ def sync_categories_to_fdroid(categories=None):
     if categories is None:
         categories = load_categories()
 
-    # Also collect categories from all app metadata
-    all_categories = set(categories)
+    # Start with admin-defined categories (with localization)
+    categories_yml = {}
+    for cat_id, cat_data in categories.items():
+        if cat_id:
+            categories_yml[cat_id] = {
+                "name": cat_data.get("name", {"en-US": cat_id})
+            }
+            if "description" in cat_data:
+                categories_yml[cat_id]["description"] = cat_data["description"]
+
+    # Also collect categories from all app metadata (without localization)
     if os.path.exists(METADATA_DIR):
         for entry in os.listdir(METADATA_DIR):
             if entry.endswith(".yml"):
@@ -68,24 +90,17 @@ def sync_categories_to_fdroid(categories=None):
                         data = yaml.safe_load(f) or {}
                     cats = data.get("Categories", [])
                     if isinstance(cats, list):
-                        all_categories.update(cats)
-                    elif cats:
-                        all_categories.add(str(cats))
+                        for cat in cats:
+                            if cat and cat not in categories_yml:
+                                categories_yml[cat] = {"name": {"en-US": cat}}
+                    elif cats and cats not in categories_yml:
+                        categories_yml[cats] = {"name": {"en-US": cats}}
                 except Exception:
                     pass
 
     # Create F-Droid config directory
     fdroid_config_dir = "/data/repo/config"
     os.makedirs(fdroid_config_dir, exist_ok=True)
-
-    # Write categories.yml in F-Droid format
-    # Format: category_id: {name: {locale: name}, description: {locale: desc}}
-    categories_yml = {}
-    for cat in all_categories:
-        if cat:
-            categories_yml[cat] = {
-                "name": {"en-US": cat}
-            }
 
     categories_path = os.path.join(fdroid_config_dir, "categories.yml")
     with open(categories_path, "w") as f:
@@ -1252,7 +1267,18 @@ def api_check_virustotal_analysis(analysis_id):
 @app.route("/api/categories", methods=["GET"])
 @require_api_key
 def api_list_categories():
-    """List all predefined categories"""
+    """List all predefined categories with localized names.
+
+    Returns:
+    {
+        "categories": {
+            "CategoryId": {
+                "name": {"en-US": "English", "nl": "Dutch"},
+                "description": {"en-US": "Description"}
+            }
+        }
+    }
+    """
     categories = load_categories()
     return jsonify({"categories": categories})
 
@@ -1260,40 +1286,131 @@ def api_list_categories():
 @app.route("/api/categories", methods=["POST"])
 @require_api_key
 def api_add_category():
-    """Add a new predefined category"""
-    data = request.get_json()
-    if not data or "name" not in data:
-        return jsonify({"error": "Category name required"}), 400
+    """Add a new predefined category with optional localized names.
 
-    name = data["name"].strip()
-    if not name:
-        return jsonify({"error": "Category name cannot be empty"}), 400
+    Request body:
+    {
+        "id": "CategoryId",           # Required: category identifier
+        "name": {                      # Optional: localized names (defaults to id)
+            "en-US": "English Name",
+            "nl": "Dutch Name"
+        },
+        "description": {               # Optional: localized descriptions
+            "en-US": "Description"
+        }
+    }
+
+    Legacy format also supported:
+    {"name": "CategoryName"}  # Creates category with id=name
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "No JSON data provided"}), 400
+
+    # Support both new format (id + localized name) and legacy format (just name)
+    if "id" in data:
+        cat_id = data["id"].strip()
+        localized_name = data.get("name", {"en-US": cat_id})
+    elif "name" in data:
+        # Legacy format or simple format
+        if isinstance(data["name"], str):
+            cat_id = data["name"].strip()
+            localized_name = {"en-US": cat_id}
+        else:
+            # name is already a dict of localized names, need id
+            return jsonify({"error": "Category id required when name is localized"}), 400
+    else:
+        return jsonify({"error": "Category id or name required"}), 400
+
+    if not cat_id:
+        return jsonify({"error": "Category id cannot be empty"}), 400
 
     categories = load_categories()
 
-    if name in categories:
+    if cat_id in categories:
         return jsonify({"error": "Category already exists"}), 409
 
-    categories.append(name)
-    categories.sort()
+    # Build category data
+    cat_data = {"name": localized_name}
+    if "description" in data:
+        cat_data["description"] = data["description"]
+
+    categories[cat_id] = cat_data
+    # Sort by id
+    categories = dict(sorted(categories.items()))
     save_categories(categories)
 
-    return jsonify({"success": True, "category": name, "categories": categories})
+    return jsonify({
+        "success": True,
+        "category": {cat_id: cat_data},
+        "categories": categories
+    })
 
 
-@app.route("/api/categories/<name>", methods=["DELETE"])
+@app.route("/api/categories/<cat_id>", methods=["GET"])
 @require_api_key
-def api_delete_category(name):
+def api_get_category(cat_id):
+    """Get a single category by id"""
+    categories = load_categories()
+
+    if cat_id not in categories:
+        return jsonify({"error": "Category not found"}), 404
+
+    return jsonify({
+        "id": cat_id,
+        "category": categories[cat_id]
+    })
+
+
+@app.route("/api/categories/<cat_id>", methods=["PUT"])
+@require_api_key
+def api_update_category(cat_id):
+    """Update a category's localized names/descriptions.
+
+    Request body:
+    {
+        "name": {"en-US": "New Name", "nl": "Nieuwe Naam"},
+        "description": {"en-US": "New description"}
+    }
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "No JSON data provided"}), 400
+
+    categories = load_categories()
+
+    if cat_id not in categories:
+        return jsonify({"error": "Category not found"}), 404
+
+    # Update fields
+    if "name" in data:
+        categories[cat_id]["name"] = data["name"]
+    if "description" in data:
+        categories[cat_id]["description"] = data["description"]
+
+    save_categories(categories)
+
+    return jsonify({
+        "success": True,
+        "id": cat_id,
+        "category": categories[cat_id],
+        "categories": categories
+    })
+
+
+@app.route("/api/categories/<cat_id>", methods=["DELETE"])
+@require_api_key
+def api_delete_category(cat_id):
     """Delete a predefined category"""
     categories = load_categories()
 
-    if name not in categories:
+    if cat_id not in categories:
         return jsonify({"error": "Category not found"}), 404
 
-    categories.remove(name)
+    del categories[cat_id]
     save_categories(categories)
 
-    return jsonify({"success": True, "deleted": name, "categories": categories})
+    return jsonify({"success": True, "deleted": cat_id, "categories": categories})
 
 
 @app.route("/api/health", methods=["GET"])
