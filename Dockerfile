@@ -20,13 +20,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     rsync \
     openssh-client \
     apksigner \
-    androguard \
     nginx \
     supervisor \
     && rm -rf /var/lib/apt/lists/*
 
-# Upgrade androguard to fix "res1 must be zero" error with newer APKs
-RUN pip3 install --no-cache-dir --break-system-packages --upgrade androguard
+# Replace system androguard with pip version to fix "res1 must be zero" error
+RUN pip3 install --no-cache-dir --break-system-packages --force-reinstall --target=/usr/lib/python3/dist-packages androguard
 
 # Install Android SDK command-line tools
 RUN mkdir -p ${ANDROID_HOME}/cmdline-tools && \
