@@ -57,7 +57,14 @@ PYEOF
         # Trigger index rebuild
         echo "Rebuilding repository index..."
         cd "$REPO_DIR"
-        fdroid update --create-metadata 2>&1 || echo "Warning: fdroid update failed, may need manual intervention"
+
+        # Remove empty categories.txt if it exists (fdroidserver 2.4+ requires it to have content or not exist)
+        if [ -f "repo/categories.txt" ] && [ ! -s "repo/categories.txt" ]; then
+            rm -f "repo/categories.txt"
+            echo "Removed empty categories.txt"
+        fi
+
+        fdroid update --create-metadata 2>&1 || echo "Note: fdroid update returned non-zero (may be empty repo)"
         echo "Config applied and index rebuilt"
     fi
 }
@@ -138,6 +145,12 @@ update_repo() {
     if [ -d "/unsigned" ] && [ "$(ls -A /unsigned/*.apk 2>/dev/null)" ]; then
         echo "Found APKs in /unsigned, copying to repo..."
         cp /unsigned/*.apk "$REPO_DIR/repo/" 2>/dev/null || true
+    fi
+
+    # Remove empty categories.txt if it exists (fdroidserver 2.4+ requires it to have content or not exist)
+    if [ -f "repo/categories.txt" ] && [ ! -s "repo/categories.txt" ]; then
+        rm -f "repo/categories.txt"
+        echo "Removed empty categories.txt"
     fi
 
     fdroid update --create-metadata --verbose
