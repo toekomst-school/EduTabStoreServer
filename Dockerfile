@@ -7,9 +7,8 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV ANDROID_HOME=/opt/android-sdk
 ENV PATH="${PATH}:${ANDROID_HOME}/cmdline-tools/latest/bin:${ANDROID_HOME}/platform-tools"
 
-# Install dependencies
+# Install dependencies (fdroidserver installed via pip for newer version with androguard 4.x support)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    fdroidserver \
     python3 \
     python3-pip \
     python3-venv \
@@ -23,9 +22,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     nginx \
     supervisor \
     && rm -rf /var/lib/apt/lists/*
-
-# Note: androguard is pinned in admin/requirements.txt to override the system version
-# (fixes "res1 must be zero" parsing error with newer APKs)
 
 # Install Android SDK command-line tools
 RUN mkdir -p ${ANDROID_HOME}/cmdline-tools && \
