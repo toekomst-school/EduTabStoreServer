@@ -23,7 +23,7 @@
             text-align: center;
             box-shadow: 0 10px 40px rgba(0,0,0,0.2);
         }
-        .logo { font-size: 64px; margin-bottom: 16px; }
+        .logo { margin-bottom: 16px; }
         h1 { color: #1565C0; margin-bottom: 8px; }
         .tagline { color: #666; margin-bottom: 32px; }
         .button {
@@ -45,7 +45,14 @@
 </head>
 <body>
     <div class="container">
-        <div class="logo">📚</div>
+        <div class="logo">
+            <svg width="80" height="80" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <rect x="3" y="3" width="12" height="12" rx="3" fill="#4CAF50"/>
+                <rect x="17" y="3" width="12" height="12" rx="3" fill="#66BB6A"/>
+                <rect x="3" y="17" width="12" height="12" rx="3" fill="#81C784"/>
+                <rect x="17" y="17" width="12" height="12" rx="3" fill="#A5D6A7"/>
+            </svg>
+        </div>
         <h1>EdutabStore</h1>
         <p class="tagline">Educational apps for tablets</p>
         <a href="/repo/" class="button">Browse Apps</a>

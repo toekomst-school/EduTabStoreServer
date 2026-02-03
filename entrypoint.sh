@@ -10,6 +10,7 @@ REPO_DESCRIPTION="${REPO_DESCRIPTION:-Educational apps for tablets}"
 REPO_URL="${REPO_URL:-https://store.edutab.nl/repo}"
 ARCHIVE_NAME="${ARCHIVE_NAME:-${REPO_NAME} Archive}"
 ARCHIVE_DESCRIPTION="${ARCHIVE_DESCRIPTION:-Older versions of ${REPO_NAME} apps}"
+REPO_ICON="${REPO_ICON:-edutab-icon.png}"
 
 # Apply environment variables to config
 apply_env_config() {
@@ -31,6 +32,8 @@ config['repo_description'] = "${REPO_DESCRIPTION}"
 config['repo_url'] = "${REPO_URL}"
 config['archive_name'] = "${ARCHIVE_NAME}"
 config['archive_description'] = "${ARCHIVE_DESCRIPTION}"
+config['repo_icon'] = "${REPO_ICON}"
+config['archive_icon'] = "${REPO_ICON}"
 
 # Ensure keystore path is correct
 config['keystore'] = '/config/keystore.p12'
