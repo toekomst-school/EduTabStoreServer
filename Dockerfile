@@ -25,6 +25,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     supervisor \
     && rm -rf /var/lib/apt/lists/*
 
+# Upgrade androguard to fix "res1 must be zero" error with newer APKs
+RUN pip3 install --no-cache-dir --break-system-packages --upgrade androguard
+
 # Install Android SDK command-line tools
 RUN mkdir -p ${ANDROID_HOME}/cmdline-tools && \
     cd ${ANDROID_HOME}/cmdline-tools && \
