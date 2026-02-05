@@ -661,6 +661,8 @@ def get_app_info(package):
                 info["metadata"]["webSite"] = yml_data["WebSite"]
             if "SourceCode" in yml_data:
                 info["metadata"]["sourceCode"] = yml_data["SourceCode"]
+            if "settingsSchema" in yml_data:
+                info["metadata"]["settingsSchema"] = yml_data["settingsSchema"]
         except Exception:
             pass
 
@@ -909,6 +911,9 @@ def api_update_metadata(package):
     if "sourceCode" in data:
         yml_fields["SourceCode"] = data["sourceCode"]
         updated_fields.append("sourceCode")
+    if "settingsSchema" in data:
+        yml_fields["settingsSchema"] = data["settingsSchema"]
+        updated_fields.append("settingsSchema")
 
     # Write yml file if we have yml fields
     if yml_fields:
