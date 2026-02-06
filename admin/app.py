@@ -64,23 +64,42 @@ def save_categories(categories):
 
 
 def sync_categories_to_fdroid(categories=None):
-    """Sync categories to F-Droid's config/categories.yml for index-v2"""
+    """Sync categories to F-Droid's config/categories.yml for index-v2
+
+    F-Droid expects simple strings for name/description, not nested locale dicts:
+    CategoryId:
+      name: Category Name
+      description: Optional description
+    """
     import yaml
 
     if categories is None:
         categories = load_categories()
 
-    # Start with admin-defined categories (with localization)
+    # Start with admin-defined categories (use en-US or first available locale)
     categories_yml = {}
     for cat_id, cat_data in categories.items():
         if cat_id:
-            categories_yml[cat_id] = {
-                "name": cat_data.get("name", {"en-US": cat_id})
-            }
-            if "description" in cat_data:
-                categories_yml[cat_id]["description"] = cat_data["description"]
+            # Extract simple string from localized name dict
+            name_data = cat_data.get("name", {})
+            if isinstance(name_data, dict):
+                name = name_data.get("en-US") or name_data.get("en") or next(iter(name_data.values()), cat_id)
+            else:
+                name = str(name_data) if name_data else cat_id
 
-    # Also collect categories from all app metadata (without localization)
+            categories_yml[cat_id] = {"name": name}
+
+            # Handle description similarly
+            desc_data = cat_data.get("description")
+            if desc_data:
+                if isinstance(desc_data, dict):
+                    desc = desc_data.get("en-US") or desc_data.get("en") or next(iter(desc_data.values()), None)
+                else:
+                    desc = str(desc_data)
+                if desc:
+                    categories_yml[cat_id]["description"] = desc
+
+    # Also collect categories from all app metadata
     if os.path.exists(METADATA_DIR):
         for entry in os.listdir(METADATA_DIR):
             if entry.endswith(".yml"):
@@ -92,9 +111,9 @@ def sync_categories_to_fdroid(categories=None):
                     if isinstance(cats, list):
                         for cat in cats:
                             if cat and cat not in categories_yml:
-                                categories_yml[cat] = {"name": {"en-US": cat}}
+                                categories_yml[cat] = {"name": cat}
                     elif cats and cats not in categories_yml:
-                        categories_yml[cats] = {"name": {"en-US": cats}}
+                        categories_yml[cats] = {"name": cats}
                 except Exception:
                     pass
 
