@@ -661,8 +661,16 @@ def get_app_info(package):
                 info["metadata"]["webSite"] = yml_data["WebSite"]
             if "SourceCode" in yml_data:
                 info["metadata"]["sourceCode"] = yml_data["SourceCode"]
-            if "settingsSchema" in yml_data:
-                info["metadata"]["settingsSchema"] = yml_data["settingsSchema"]
+        except Exception:
+            pass
+
+    # Read settingsSchema from separate file (not stored in F-Droid yml)
+    settings_path = os.path.join(METADATA_DIR, f"{package}.settings.json")
+    if os.path.exists(settings_path):
+        try:
+            with open(settings_path, "r") as f:
+                settings_data = json.load(f)
+                info["metadata"]["settingsSchema"] = settings_data.get("settingsSchema", [])
         except Exception:
             pass
 
@@ -806,6 +814,66 @@ def api_get_app(package):
     return jsonify(info)
 
 
+@app.route("/api/apps/<package>/apk-info", methods=["GET"])
+@require_api_key
+def api_get_apk_info(package):
+    """Get APK file info for HMDM integration (URL, version, etc.)"""
+    from androguard.core.apk import APK
+
+    # Find APK files for this package
+    apk_files = glob.glob(os.path.join(REPO_DIR, f"{package}_*.apk"))
+    if not apk_files:
+        apk_files = glob.glob(os.path.join(REPO_DIR, "*.apk"))
+        apk_files = [f for f in apk_files if get_package_from_apk(f) == package]
+
+    if not apk_files:
+        return jsonify({"error": "No APK found for this package"}), 404
+
+    # Get the latest APK (by modification time)
+    apk_path = max(apk_files, key=os.path.getmtime)
+    filename = os.path.basename(apk_path)
+
+    # Extract version info using androguard
+    try:
+        apk = APK(apk_path)
+        version_name = apk.get_androidversion_name() or "1.0"
+        version_code = int(apk.get_androidversion_code() or 1)
+    except Exception as e:
+        print(f"[apk-info] Failed to parse APK: {e}")
+        version_name = "1.0"
+        version_code = 1
+
+    # Get app name from metadata
+    info = get_app_info(package)
+    app_name = info.get("metadata", {}).get("title") if info else None
+    if not app_name:
+        app_name = package.split(".")[-1].title()
+
+    # Build the public APK URL
+    public_url = os.environ.get("PUBLIC_URL", "https://store.edutab.eu")
+    apk_url = f"{public_url}/repo/{filename}"
+
+    # Build icon URL if available
+    icon_url = None
+    metadata_dir = os.path.join(METADATA_DIR, package, "en-US", "images")
+    if os.path.exists(metadata_dir):
+        for icon_name in ["icon.png", "icon.jpg"]:
+            icon_path = os.path.join(metadata_dir, icon_name)
+            if os.path.exists(icon_path):
+                icon_url = f"{public_url}/repo/{package}/en-US/images/{icon_name}"
+                break
+
+    return jsonify({
+        "package": package,
+        "name": app_name,
+        "version": version_name,
+        "versionCode": version_code,
+        "apkUrl": apk_url,
+        "filename": filename,
+        "icon": icon_url
+    })
+
+
 @app.route("/api/apps/<package>", methods=["DELETE"])
 @require_api_key
 def api_delete_app(package):
@@ -911,8 +979,12 @@ def api_update_metadata(package):
     if "sourceCode" in data:
         yml_fields["SourceCode"] = data["sourceCode"]
         updated_fields.append("sourceCode")
+
+    # Handle settingsSchema separately (F-Droid doesn't support custom fields)
     if "settingsSchema" in data:
-        yml_fields["settingsSchema"] = data["settingsSchema"]
+        settings_path = os.path.join(METADATA_DIR, f"{package}.settings.json")
+        with open(settings_path, "w") as f:
+            json.dump({"settingsSchema": data["settingsSchema"]}, f, indent=2)
         updated_fields.append("settingsSchema")
 
     # Write yml file if we have yml fields
