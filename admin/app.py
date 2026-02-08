@@ -27,6 +27,10 @@ API_KEY = os.environ.get("ADMIN_API_KEY", "")
 VIRUSTOTAL_API_KEY = os.environ.get("VIRUSTOTAL_API_KEY", "")
 QUARANTINE_DIR = "/data/quarantine"
 CATEGORIES_FILE = os.path.join(CONFIG_DIR, "categories.json")
+HIDDEN_DIR = "/data/repo/hidden"  # Temp storage for non-published APKs during F-Droid update
+
+# Valid app status values
+VALID_APP_STATUSES = {"published", "unpublished", "private", "quarantine", "testing"}
 
 
 def load_categories():
@@ -383,11 +387,88 @@ def check_virustotal_safety(apk_path, max_malicious=0, max_suspicious=2):
         }
 
 
+def get_non_published_packages():
+    """Get list of packages that are NOT published (should be excluded from F-Droid index)."""
+    import yaml
+    non_published = []
+
+    if not os.path.exists(METADATA_DIR):
+        return non_published
+
+    for entry in os.listdir(METADATA_DIR):
+        if entry.endswith(".yml"):
+            yml_path = os.path.join(METADATA_DIR, entry)
+            try:
+                with open(yml_path, "r") as f:
+                    data = yaml.safe_load(f) or {}
+                status = data.get("Status", "published")
+                if status != "published":
+                    package = entry[:-4]  # Remove .yml extension
+                    non_published.append(package)
+                    print(f"[fdroid] Package {package} has status '{status}', will be hidden from index")
+            except Exception as e:
+                print(f"[fdroid] Warning: Could not read {entry}: {e}")
+
+    return non_published
+
+
+def hide_apks_for_packages(packages):
+    """Move APKs for given packages to hidden directory. Returns list of moved files."""
+    if not packages:
+        return []
+
+    os.makedirs(HIDDEN_DIR, exist_ok=True)
+    moved = []
+
+    for package in packages:
+        # Find APK files for this package
+        apk_files = glob.glob(os.path.join(REPO_DIR, f"{package}_*.apk"))
+        if not apk_files:
+            # Try matching by package name from APK
+            all_apks = glob.glob(os.path.join(REPO_DIR, "*.apk"))
+            for apk_path in all_apks:
+                apk_package = get_package_from_apk(apk_path)
+                if apk_package == package:
+                    apk_files.append(apk_path)
+
+        for apk_path in apk_files:
+            filename = os.path.basename(apk_path)
+            hidden_path = os.path.join(HIDDEN_DIR, filename)
+            try:
+                shutil.move(apk_path, hidden_path)
+                moved.append((filename, hidden_path))
+                print(f"[fdroid] Hid APK: {filename}")
+            except Exception as e:
+                print(f"[fdroid] Warning: Could not hide {filename}: {e}")
+
+    return moved
+
+
+def restore_hidden_apks(moved_files):
+    """Restore previously hidden APKs back to repo directory."""
+    for filename, hidden_path in moved_files:
+        if os.path.exists(hidden_path):
+            repo_path = os.path.join(REPO_DIR, filename)
+            try:
+                shutil.move(hidden_path, repo_path)
+                print(f"[fdroid] Restored APK: {filename}")
+            except Exception as e:
+                print(f"[fdroid] Warning: Could not restore {filename}: {e}")
+
+
 def run_fdroid_update():
-    """Run fdroid update command"""
+    """Run fdroid update command, excluding non-published apps from the index."""
+    moved_files = []
+
     try:
         # Sync categories to F-Droid config before update
         sync_categories_to_fdroid()
+
+        # Hide non-published APKs before running fdroid update
+        non_published = get_non_published_packages()
+        if non_published:
+            print(f"[fdroid] Hiding {len(non_published)} non-published packages from index")
+            moved_files = hide_apks_for_packages(non_published)
 
         print("[fdroid] Running fdroid update --create-metadata --verbose")
         result = subprocess.run(
@@ -420,6 +501,11 @@ def run_fdroid_update():
     except Exception as e:
         print(f"[fdroid] Update ERROR: {e}")
         return False, str(e)
+    finally:
+        # Always restore hidden APKs, even on failure
+        if moved_files:
+            print(f"[fdroid] Restoring {len(moved_files)} hidden APKs")
+            restore_hidden_apks(moved_files)
 
 
 def get_file_sha256(filepath):
@@ -534,6 +620,59 @@ def save_virustotal_result(package, sha256, result):
             "result": result
         }, f, indent=2)
     return filepath
+
+
+def set_app_status(package, status, reason=None):
+    """Set an app's status in its YML metadata file.
+
+    Args:
+        package: Package name
+        status: Status value (published, unpublished, private, quarantine, testing)
+        reason: Optional reason for the status change (logged)
+
+    Returns:
+        True if successful, False otherwise
+    """
+    import yaml
+
+    if status not in VALID_APP_STATUSES:
+        print(f"[status] Invalid status '{status}' for {package}")
+        return False
+
+    yml_path = os.path.join(METADATA_DIR, f"{package}.yml")
+
+    try:
+        existing_yml = {}
+        if os.path.exists(yml_path):
+            with open(yml_path, "r") as f:
+                existing_yml = yaml.safe_load(f) or {}
+
+        old_status = existing_yml.get("Status", "published")
+        existing_yml["Status"] = status
+
+        with open(yml_path, "w") as f:
+            yaml.dump(existing_yml, f, default_flow_style=False)
+
+        log_msg = f"[status] Changed {package} status: {old_status} -> {status}"
+        if reason:
+            log_msg += f" (reason: {reason})"
+        print(log_msg)
+
+        return True
+    except Exception as e:
+        print(f"[status] Failed to set status for {package}: {e}")
+        return False
+
+
+def auto_quarantine_app(package, reason):
+    """Auto-quarantine an app due to security concerns.
+
+    Args:
+        package: Package name
+        reason: Reason for quarantine (e.g., "VirusTotal: malicious detections")
+    """
+    print(f"[auto-quarantine] Quarantining {package}: {reason}")
+    return set_app_status(package, "quarantine", reason)
 
 
 def get_virustotal_result(package):
@@ -680,8 +819,17 @@ def get_app_info(package):
                 info["metadata"]["webSite"] = yml_data["WebSite"]
             if "SourceCode" in yml_data:
                 info["metadata"]["sourceCode"] = yml_data["SourceCode"]
+            # Read status field (default to 'published' if not set)
+            if "Status" in yml_data:
+                info["metadata"]["status"] = yml_data["Status"]
+            else:
+                info["metadata"]["status"] = "published"
         except Exception:
-            pass
+            # Default status if yml parsing fails
+            info["metadata"]["status"] = "published"
+    else:
+        # Default status if no yml exists
+        info["metadata"]["status"] = "published"
 
     # Read settingsSchema from separate file (not stored in F-Droid yml)
     settings_path = os.path.join(METADATA_DIR, f"{package}.settings.json")
@@ -703,6 +851,20 @@ def get_app_info(package):
             "scanned_at": latest.get("timestamp"),
             "stats": stats
         }
+
+    # Build icon URL - F-Droid stores icons as {package}.{versionCode}.png
+    if apk_files:
+        try:
+            from androguard.core.apk import APK
+            apk = APK(apk_files[0])
+            version_code = int(apk.get_androidversion_code() or 1)
+            icon_filename = f"{package}.{version_code}.png"
+            icon_path = os.path.join(REPO_DIR, "icons", icon_filename)
+            if os.path.exists(icon_path):
+                public_url = os.environ.get("PUBLIC_URL", "https://store.edutab.eu")
+                info["icon"] = f"{public_url}/repo/icons/{icon_filename}"
+        except Exception:
+            pass
 
     return info
 
@@ -872,15 +1034,13 @@ def api_get_apk_info(package):
     public_url = os.environ.get("PUBLIC_URL", "https://store.edutab.eu")
     apk_url = f"{public_url}/repo/{filename}"
 
-    # Build icon URL if available
+    # Build icon URL if available - F-Droid stores icons as {package}.{versionCode}.png
     icon_url = None
-    metadata_dir = os.path.join(METADATA_DIR, package, "en-US", "images")
-    if os.path.exists(metadata_dir):
-        for icon_name in ["icon.png", "icon.jpg"]:
-            icon_path = os.path.join(metadata_dir, icon_name)
-            if os.path.exists(icon_path):
-                icon_url = f"{public_url}/repo/{package}/en-US/images/{icon_name}"
-                break
+    icons_dir = os.path.join(REPO_DIR, "icons")
+    icon_filename = f"{package}.{version_code}.png"
+    icon_path = os.path.join(icons_dir, icon_filename)
+    if os.path.exists(icon_path):
+        icon_url = f"{public_url}/repo/icons/{icon_filename}"
 
     return jsonify({
         "package": package,
@@ -998,6 +1158,13 @@ def api_update_metadata(package):
     if "sourceCode" in data:
         yml_fields["SourceCode"] = data["sourceCode"]
         updated_fields.append("sourceCode")
+    if "status" in data:
+        status = data["status"]
+        if status in VALID_APP_STATUSES:
+            yml_fields["Status"] = status
+            updated_fields.append("status")
+        else:
+            return jsonify({"error": f"Invalid status. Must be one of: {', '.join(VALID_APP_STATUSES)}"}), 400
 
     # Handle settingsSchema separately (F-Droid doesn't support custom fields)
     if "settingsSchema" in data:
@@ -1300,12 +1467,26 @@ def api_scan_virustotal(package):
         if vt_report:
             save_virustotal_result(package, sha256, vt_report)
             stats = extract_virustotal_stats(vt_report)
+
+            # Auto-quarantine if threats detected
+            auto_quarantined = False
+            if stats:
+                malicious = stats.get("malicious", 0)
+                suspicious = stats.get("suspicious", 0)
+                if malicious > 0 or suspicious > 0:
+                    auto_quarantine_app(
+                        package,
+                        f"VirusTotal detected {malicious} malicious, {suspicious} suspicious"
+                    )
+                    auto_quarantined = True
+
             return jsonify({
                 "status": "completed",
                 "package": package,
                 "sha256": sha256,
                 "stats": stats,
-                "message": "File already in VirusTotal database"
+                "message": "File already in VirusTotal database",
+                "auto_quarantined": auto_quarantined
             })
 
     # Upload for scanning
@@ -1923,10 +2104,18 @@ def setup_bubblewrap_config():
     return config_path
 
 
-def build_pwa_apk(manifest_url, package_id, app_name, signing_key_config):
+def build_pwa_apk(manifest_url, package_id, app_name, signing_key_config, manual_options=None):
     """
     Build APK from PWA using @bubblewrap/core via Node.js script.
     This bypasses all interactive CLI prompts.
+
+    manual_options can include:
+    - icon_base64: Base64 encoded PNG icon
+    - theme_color: Theme color hex code
+    - background_color: Background color hex code
+    - description: App description
+    - display: Display mode (fullscreen, standalone, minimal-ui)
+
     Returns (apk_path, error_message)
     """
     build_id = f"pwa-{int(time.time())}"
@@ -1938,6 +2127,20 @@ def build_pwa_apk(manifest_url, package_id, app_name, signing_key_config):
         print(f"[pwa] Manifest URL: {manifest_url}", flush=True)
         print(f"[pwa] Package ID: {package_id}", flush=True)
 
+        # Handle manual icon if provided
+        icon_path = ""
+        if manual_options and manual_options.get("icon_base64"):
+            try:
+                import base64
+                icon_data = base64.b64decode(manual_options["icon_base64"])
+                icon_path = os.path.join(work_dir, "manual-icon.png")
+                with open(icon_path, "wb") as f:
+                    f.write(icon_data)
+                print(f"[pwa] Saved manual icon to {icon_path}", flush=True)
+            except Exception as e:
+                print(f"[pwa] Warning: Failed to save icon: {e}", flush=True)
+                icon_path = ""
+
         # Set environment
         env = os.environ.copy()
         env["HOME"] = "/root"
@@ -1946,17 +2149,31 @@ def build_pwa_apk(manifest_url, package_id, app_name, signing_key_config):
         env["ANDROID_SDK_ROOT"] = "/opt/android-sdk"
         env["GRADLE_USER_HOME"] = "/root/.gradle"
 
+        # Build command arguments
+        cmd_args = [
+            "node", "/opt/admin/pwa-builder.js",
+            manifest_url,
+            work_dir,
+            signing_key_config["path"],
+            signing_key_config["alias"],
+            signing_key_config["password"],
+            package_id,
+            # New manual override fields (passed as JSON)
+            json.dumps({
+                "appName": app_name,
+                "themeColor": manual_options.get("theme_color", "") if manual_options else "",
+                "backgroundColor": manual_options.get("background_color", "") if manual_options else "",
+                "description": manual_options.get("description", "") if manual_options else "",
+                "display": manual_options.get("display", "") if manual_options else "",
+                "iconPath": icon_path
+            })
+        ]
+
         # Build using Node.js script with @bubblewrap/core (no interactive prompts!)
         print(f"[pwa] Running pwa-builder.js...", flush=True)
 
         build_result = subprocess.run(
-            ["node", "/opt/admin/pwa-builder.js",
-             manifest_url,
-             work_dir,
-             signing_key_config["path"],
-             signing_key_config["alias"],
-             signing_key_config["password"],
-             package_id],  # Pass custom package ID to override bubblewrap's default
+            cmd_args,
             env=env,
             capture_output=True,
             text=True,
@@ -2060,7 +2277,13 @@ def api_build_pwa():
     {
         "url": "https://example.com",
         "name": "My PWA App",  // optional, fetched from manifest if not provided
-        "package_id": "com.example.pwa"  // optional, generated if not provided
+        "package_id": "com.example.pwa",  // optional, generated if not provided
+        "manual_mode": false,  // set to true to skip manifest fetch
+        "icon": "base64...",  // optional, base64 encoded PNG icon for manual mode
+        "theme_color": "#4F46E5",  // optional, theme color for manual mode
+        "background_color": "#FFFFFF",  // optional, background color for manual mode
+        "description": "App description",  // optional, description for manual mode
+        "display": "fullscreen"  // optional, display mode (fullscreen, standalone, minimal-ui)
     }
     """
     data = request.get_json()
@@ -2071,10 +2294,15 @@ def api_build_pwa():
     if not url.startswith("http"):
         url = "https://" + url
 
-    # Fetch manifest first
-    manifest, manifest_url, error = fetch_pwa_manifest(url)
-    if error:
-        return jsonify({"error": f"Failed to fetch manifest: {error}"}), 400
+    manual_mode = data.get("manual_mode", False)
+    manifest = {}
+    manifest_url = url
+
+    # Fetch manifest first (unless manual mode)
+    if not manual_mode:
+        manifest, manifest_url, error = fetch_pwa_manifest(url)
+        if error:
+            return jsonify({"error": f"Failed to fetch manifest: {error}"}), 400
 
     # Get app name
     app_name = data.get("name") or manifest.get("name") or manifest.get("short_name") or "PWA App"
@@ -2106,8 +2334,17 @@ def api_build_pwa():
         "password": PWA_KEYSTORE_PASSWORD
     }
 
+    # Prepare manual options (used for both manual mode and overrides)
+    manual_options = {
+        "icon_base64": data.get("icon"),
+        "theme_color": data.get("theme_color") or manifest.get("theme_color", "#FFFFFF"),
+        "background_color": data.get("background_color") or manifest.get("background_color", "#FFFFFF"),
+        "description": data.get("description") or manifest.get("description", ""),
+        "display": data.get("display") or manifest.get("display", "fullscreen")  # Default: fullscreen for education
+    }
+
     # Build APK
-    apk_path, build_error = build_pwa_apk(manifest_url, package_id, app_name, signing_config)
+    apk_path, build_error = build_pwa_apk(manifest_url, package_id, app_name, signing_config, manual_options)
     if build_error:
         return jsonify({"error": build_error}), 500
 
@@ -2126,10 +2363,11 @@ def api_build_pwa():
     if result["success"]:
         # Update metadata with PWA info
         try:
+            pwa_description = data.get("description") or manifest.get("description") or f"This app is a PWA (Progressive Web App) wrapper for {url}"
             metadata = {
                 "name": app_name,
-                "summary": manifest.get("description", f"PWA wrapper for {url}")[:80],
-                "description": manifest.get("description", f"This app is a PWA (Progressive Web App) wrapper for {url}"),
+                "summary": pwa_description[:80],
+                "description": pwa_description,
                 "webSite": url,
                 "categories": ["PWA"]
             }
