@@ -7,10 +7,10 @@
 const path = require('path');
 const fs = require('fs');
 
-async function buildPwaApk(manifestUrl, outputDir, signingConfig, customPackageId) {
+async function buildPwaApk(manifestUrl, outputDir, signingConfig, customPackageId, manualOptions = {}) {
     // Dynamic import for ESM module
     const bubblewrap = await import('@bubblewrap/core');
-    const { TwaManifest, TwaGenerator, GradleWrapper, AndroidSdkTools, JdkHelper, Config, ConsoleLog } = bubblewrap;
+    const { TwaManifest, TwaGenerator, GradleWrapper, AndroidSdkTools, JdkHelper, Config, ConsoleLog, Color } = bubblewrap;
 
     const JDK_PATH = process.env.JAVA_HOME || '/usr/lib/jvm/java-17-openjdk-amd64';
     const ANDROID_SDK_PATH = process.env.ANDROID_HOME || '/opt/android-sdk';
@@ -19,6 +19,9 @@ async function buildPwaApk(manifestUrl, outputDir, signingConfig, customPackageI
     console.log(`[pwa-builder] Output dir: ${outputDir}`);
     console.log(`[pwa-builder] JDK: ${JDK_PATH}`);
     console.log(`[pwa-builder] Android SDK: ${ANDROID_SDK_PATH}`);
+    if (Object.keys(manualOptions).length > 0) {
+        console.log(`[pwa-builder] Manual options:`, JSON.stringify(manualOptions));
+    }
 
     try {
         // Create config, JdkHelper, and AndroidSdkTools properly
@@ -35,6 +38,30 @@ async function buildPwaApk(manifestUrl, outputDir, signingConfig, customPackageI
         if (customPackageId) {
             twaManifest.packageId = customPackageId;
             console.log(`[pwa-builder] Using custom package ID: ${customPackageId}`);
+        }
+
+        // Apply manual options (overrides or manual mode values)
+        if (manualOptions.appName) {
+            twaManifest.name = manualOptions.appName;
+            twaManifest.shortName = manualOptions.appName.substring(0, 12);
+            console.log(`[pwa-builder] Using app name: ${manualOptions.appName}`);
+        }
+        if (manualOptions.themeColor) {
+            twaManifest.themeColor = new Color(manualOptions.themeColor);
+            console.log(`[pwa-builder] Using theme color: ${manualOptions.themeColor}`);
+        }
+        if (manualOptions.backgroundColor) {
+            twaManifest.backgroundColor = new Color(manualOptions.backgroundColor);
+            console.log(`[pwa-builder] Using background color: ${manualOptions.backgroundColor}`);
+        }
+        if (manualOptions.display) {
+            twaManifest.display = manualOptions.display;
+            console.log(`[pwa-builder] Using display mode: ${manualOptions.display}`);
+        }
+        if (manualOptions.iconPath && fs.existsSync(manualOptions.iconPath)) {
+            // For custom icons, we need to set the icon URL to a file:// URL
+            twaManifest.iconUrl = `file://${manualOptions.iconPath}`;
+            console.log(`[pwa-builder] Using custom icon: ${manualOptions.iconPath}`);
         }
 
         console.log(`[pwa-builder] App name: ${twaManifest.name}`);
@@ -129,7 +156,7 @@ async function main() {
     const args = process.argv.slice(2);
 
     if (args.length < 2) {
-        console.log('Usage: pwa-builder.js <manifest-url> <output-dir> [keystore-path] [key-alias] [key-password] [package-id]');
+        console.log('Usage: pwa-builder.js <manifest-url> <output-dir> [keystore-path] [key-alias] [key-password] [package-id] [manual-options-json]');
         process.exit(1);
     }
 
@@ -142,7 +169,17 @@ async function main() {
     } : null;
     const customPackageId = args[5] || null;
 
-    const result = await buildPwaApk(manifestUrl, outputDir, signingConfig, customPackageId);
+    // Parse manual options (JSON string)
+    let manualOptions = {};
+    if (args[6]) {
+        try {
+            manualOptions = JSON.parse(args[6]);
+        } catch (e) {
+            console.log('[pwa-builder] Warning: Failed to parse manual options:', e.message);
+        }
+    }
+
+    const result = await buildPwaApk(manifestUrl, outputDir, signingConfig, customPackageId, manualOptions);
     console.log(JSON.stringify(result));
     process.exit(result.success ? 0 : 1);
 }
