@@ -6,11 +6,12 @@
 
 const path = require('path');
 const fs = require('fs');
+const Color = require('color').default;
 
 async function buildPwaApk(manifestUrl, outputDir, signingConfig, customPackageId, manualOptions = {}) {
     // Dynamic import for ESM module
     const bubblewrap = await import('@bubblewrap/core');
-    const { TwaManifest, TwaGenerator, GradleWrapper, AndroidSdkTools, JdkHelper, Config, ConsoleLog, Color } = bubblewrap;
+    const { TwaManifest, TwaGenerator, GradleWrapper, AndroidSdkTools, JdkHelper, Config, ConsoleLog } = bubblewrap;
 
     const JDK_PATH = process.env.JAVA_HOME || '/usr/lib/jvm/java-17-openjdk-amd64';
     const ANDROID_SDK_PATH = process.env.ANDROID_HOME || '/opt/android-sdk';
