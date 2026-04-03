@@ -10,9 +10,13 @@ import hashlib
 import json
 import time
 import requests
+import logging
 from functools import wraps
 from flask import Flask, request, jsonify
 from werkzeug.utils import secure_filename
+
+# Silence androguard's verbose debug logging
+logging.getLogger("androguard").setLevel(logging.WARNING)
 
 app = Flask(__name__)
 
@@ -2117,11 +2121,12 @@ def import_apk_to_repo(apk_path, scan_virustotal=True):
     shutil.move(apk_path, dest_path)
 
     # Extract icon from APK (adaptive icons need special handling)
+    print(f"[import] Starting icon extraction for {package}...", flush=True)
     icon_success, icon_result = extract_icon_from_apk(dest_path, package)
     if icon_success:
-        print(f"[import] Icon extracted: {icon_result}")
+        print(f"[import] Icon extracted: {icon_result}", flush=True)
     else:
-        print(f"[import] Icon extraction failed: {icon_result}")
+        print(f"[import] Icon extraction failed: {icon_result}", flush=True)
 
     # Run fdroid update
     fdroid_success, fdroid_output = run_fdroid_update()
