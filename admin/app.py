@@ -183,6 +183,7 @@ def extract_icon_from_apk(apk_path, package):
         from PIL import Image
         from io import BytesIO
     except ImportError:
+        print(f"[icon] ERROR: Pillow not installed, cannot extract icon for {package}")
         return False, "Pillow not installed"
 
     # Density preference order (highest first)
@@ -258,11 +259,14 @@ def extract_icon_from_apk(apk_path, package):
                     print(f"[icon] Failed to process {icon_file}: {e}")
                     continue
 
+            print(f"[icon] Could not process any icon candidates for {package}")
             return False, "Could not process any icon candidates"
 
     except zipfile.BadZipFile:
+        print(f"[icon] Invalid APK (not a valid ZIP): {apk_path}")
         return False, "Invalid APK (not a valid ZIP)"
     except Exception as e:
+        print(f"[icon] Error extracting icon for {package}: {e}")
         return False, f"Error extracting icon: {e}"
 
 
