@@ -963,10 +963,6 @@ def get_app_info(package):
             icon_filename = f"{package}.{version_code}.png"
             icon_path = os.path.join(REPO_DIR, "icons", icon_filename)
 
-            # Auto-extract icon if missing
-            if not os.path.exists(icon_path):
-                extract_icon_from_apk(apk_files[0], package)
-
             if os.path.exists(icon_path):
                 public_url = os.environ.get("PUBLIC_URL", "https://store.edutab.eu")
                 info["icon"] = f"{public_url}/repo/icons/{icon_filename}"
