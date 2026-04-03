@@ -455,8 +455,12 @@ def restore_hidden_apks(moved_files):
                 print(f"[fdroid] Warning: Could not restore {filename}: {e}")
 
 
-def run_fdroid_update():
-    """Run fdroid update command, excluding non-published apps from the index."""
+def run_fdroid_update(clean=False):
+    """Run fdroid update command, excluding non-published apps from the index.
+
+    Args:
+        clean: If True, skip cache and reprocess all APKs (extracts icons, etc.)
+    """
     moved_files = []
 
     try:
@@ -469,9 +473,15 @@ def run_fdroid_update():
             print(f"[fdroid] Hiding {len(non_published)} non-published packages from index")
             moved_files = hide_apks_for_packages(non_published)
 
-        print("[fdroid] Running fdroid update --create-metadata --verbose")
+        cmd = ["fdroid", "update", "--create-metadata", "--verbose"]
+        if clean:
+            cmd.append("--clean")
+            print("[fdroid] Running fdroid update --create-metadata --verbose --clean")
+        else:
+            print("[fdroid] Running fdroid update --create-metadata --verbose")
+
         result = subprocess.run(
-            ["fdroid", "update", "--create-metadata", "--verbose"],
+            cmd,
             cwd="/data/repo",
             capture_output=True,
             text=True,
@@ -1284,12 +1294,14 @@ def api_delete_screenshot(package, filename):
 @app.route("/api/update", methods=["POST"])
 @require_api_key
 def api_force_update():
-    """Force repository update"""
-    success, output = run_fdroid_update()
+    """Force repository update. Pass ?clean=true to skip cache and reprocess all APKs."""
+    clean = request.args.get("clean", "").lower() == "true"
+    success, output = run_fdroid_update(clean=clean)
 
     return jsonify({
         "success": success,
-        "output": output
+        "output": output,
+        "clean": clean
     })
 
 
