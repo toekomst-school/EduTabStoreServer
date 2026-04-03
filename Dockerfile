@@ -19,6 +19,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     rsync \
     openssh-client \
     apksigner \
+    aapt \
     nginx \
     supervisor \
     && rm -rf /var/lib/apt/lists/*
