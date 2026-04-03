@@ -5,7 +5,7 @@ LABEL description="F-Droid Server for EdutabStore"
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV ANDROID_HOME=/opt/android-sdk
-ENV PATH="${PATH}:${ANDROID_HOME}/cmdline-tools/latest/bin:${ANDROID_HOME}/platform-tools"
+ENV PATH="${PATH}:${ANDROID_HOME}/cmdline-tools/latest/bin:${ANDROID_HOME}/platform-tools:${ANDROID_HOME}/build-tools/34.0.0"
 
 # Install dependencies (fdroidserver installed via pip for newer version with androguard 4.x support)
 RUN apt-get update && apt-get install -y --no-install-recommends \
