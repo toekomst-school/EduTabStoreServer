@@ -1405,6 +1405,46 @@ def api_debug_index():
     return jsonify(result)
 
 
+@app.route("/api/fdroid/clear-cache", methods=["POST"])
+@require_api_key
+def api_clear_fdroid_cache():
+    """Clear F-Droid cache to force re-processing of APKs (extracts icons, etc.)"""
+    import glob as glob_module
+
+    cache_patterns = [
+        "/data/repo/repo/.fdroid.*",
+        "/data/repo/stats.json",
+        "/data/repo/repo/status/",
+    ]
+
+    deleted = []
+    for pattern in cache_patterns:
+        for path in glob_module.glob(pattern):
+            try:
+                if os.path.isfile(path):
+                    os.remove(path)
+                    deleted.append(path)
+                elif os.path.isdir(path):
+                    shutil.rmtree(path)
+                    deleted.append(path)
+            except Exception as e:
+                deleted.append(f"{path} (error: {e})")
+
+    # Also clear the .apk.json cache files
+    for cache_file in glob_module.glob("/data/repo/repo/*.apk.json"):
+        try:
+            os.remove(cache_file)
+            deleted.append(cache_file)
+        except Exception as e:
+            deleted.append(f"{cache_file} (error: {e})")
+
+    return jsonify({
+        "success": True,
+        "deleted": deleted,
+        "message": f"Cleared {len(deleted)} cache files. Run /api/update to re-process APKs."
+    })
+
+
 @app.route("/api/migrate/status-to-file", methods=["POST"])
 @require_api_key
 def api_migrate_status():
