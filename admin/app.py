@@ -396,14 +396,13 @@ def get_non_published_packages():
         return non_published
 
     for entry in os.listdir(METADATA_DIR):
-        if entry.endswith(".yml"):
-            yml_path = os.path.join(METADATA_DIR, entry)
+        if entry.endswith(".status"):
+            status_path = os.path.join(METADATA_DIR, entry)
             try:
-                with open(yml_path, "r") as f:
-                    data = yaml.safe_load(f) or {}
-                status = data.get("Status", "published")
+                with open(status_path, "r") as f:
+                    status = f.read().strip()
                 if status != "published":
-                    package = entry[:-4]  # Remove .yml extension
+                    package = entry[:-7]  # Remove .status extension
                     non_published.append(package)
                     print(f"[fdroid] Package {package} has status '{status}', will be hidden from index")
             except Exception as e:
@@ -623,7 +622,7 @@ def save_virustotal_result(package, sha256, result):
 
 
 def set_app_status(package, status, reason=None):
-    """Set an app's status in its YML metadata file.
+    """Set an app's status in a separate status file.
 
     Args:
         package: Package name
@@ -633,25 +632,22 @@ def set_app_status(package, status, reason=None):
     Returns:
         True if successful, False otherwise
     """
-    import yaml
-
     if status not in VALID_APP_STATUSES:
         print(f"[status] Invalid status '{status}' for {package}")
         return False
 
-    yml_path = os.path.join(METADATA_DIR, f"{package}.yml")
+    status_path = os.path.join(METADATA_DIR, f"{package}.status")
 
     try:
-        existing_yml = {}
-        if os.path.exists(yml_path):
-            with open(yml_path, "r") as f:
-                existing_yml = yaml.safe_load(f) or {}
+        # Read old status
+        old_status = "published"
+        if os.path.exists(status_path):
+            with open(status_path, "r") as f:
+                old_status = f.read().strip()
 
-        old_status = existing_yml.get("Status", "published")
-        existing_yml["Status"] = status
-
-        with open(yml_path, "w") as f:
-            yaml.dump(existing_yml, f, default_flow_style=False)
+        # Write new status
+        with open(status_path, "w") as f:
+            f.write(status)
 
         log_msg = f"[status] Changed {package} status: {old_status} -> {status}"
         if reason:
@@ -819,16 +815,18 @@ def get_app_info(package):
                 info["metadata"]["webSite"] = yml_data["WebSite"]
             if "SourceCode" in yml_data:
                 info["metadata"]["sourceCode"] = yml_data["SourceCode"]
-            # Read status field (default to 'published' if not set)
-            if "Status" in yml_data:
-                info["metadata"]["status"] = yml_data["Status"]
-            else:
-                info["metadata"]["status"] = "published"
         except Exception:
-            # Default status if yml parsing fails
+            pass
+
+    # Read status from separate file (not stored in F-Droid yml)
+    status_path = os.path.join(METADATA_DIR, f"{package}.status")
+    if os.path.exists(status_path):
+        try:
+            with open(status_path, "r") as f:
+                info["metadata"]["status"] = f.read().strip()
+        except Exception:
             info["metadata"]["status"] = "published"
     else:
-        # Default status if no yml exists
         info["metadata"]["status"] = "published"
 
     # Read settingsSchema from separate file (not stored in F-Droid yml)
@@ -1161,7 +1159,10 @@ def api_update_metadata(package):
     if "status" in data:
         status = data["status"]
         if status in VALID_APP_STATUSES:
-            yml_fields["Status"] = status
+            # Store status in separate file (F-Droid doesn't support custom fields)
+            status_path = os.path.join(METADATA_DIR, f"{package}.status")
+            with open(status_path, "w") as f:
+                f.write(status)
             updated_fields.append("status")
         else:
             return jsonify({"error": f"Invalid status. Must be one of: {', '.join(VALID_APP_STATUSES)}"}), 400
@@ -1402,6 +1403,46 @@ def api_debug_index():
                 result["metadata_files"].append(f)
 
     return jsonify(result)
+
+
+@app.route("/api/migrate/status-to-file", methods=["POST"])
+@require_api_key
+def api_migrate_status():
+    """Migrate Status field from yml files to separate .status files"""
+    import yaml
+
+    migrated = []
+    errors = []
+
+    if not os.path.exists(METADATA_DIR):
+        return jsonify({"migrated": [], "errors": [], "message": "No metadata directory"})
+
+    for entry in os.listdir(METADATA_DIR):
+        if entry.endswith(".yml"):
+            yml_path = os.path.join(METADATA_DIR, entry)
+            package = entry[:-4]
+            try:
+                with open(yml_path, "r") as f:
+                    data = yaml.safe_load(f) or {}
+
+                if "Status" in data:
+                    status = data.pop("Status")
+                    # Write status to separate file
+                    status_path = os.path.join(METADATA_DIR, f"{package}.status")
+                    with open(status_path, "w") as f:
+                        f.write(status)
+                    # Rewrite yml without Status
+                    with open(yml_path, "w") as f:
+                        yaml.dump(data, f, default_flow_style=False)
+                    migrated.append({"package": package, "status": status})
+            except Exception as e:
+                errors.append({"package": package, "error": str(e)})
+
+    return jsonify({
+        "migrated": migrated,
+        "errors": errors,
+        "message": f"Migrated {len(migrated)} packages"
+    })
 
 
 @app.route("/api/apps/<package>/virustotal", methods=["GET"])
