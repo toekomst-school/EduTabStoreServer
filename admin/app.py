@@ -175,123 +175,178 @@ def get_package_from_apk(apk_path):
 def extract_icon_from_apk(apk_path, package):
     """
     Extract icon from APK, handling both regular and adaptive icons.
-    Uses androguard to find icon path, then extracts/composites as needed.
+    Uses aapt (Android SDK) to find icon paths - works with obfuscated APKs.
     Returns (success, icon_path or error_message)
     """
     import zipfile
-    import xml.etree.ElementTree as ET
+    import subprocess
+    import re
     try:
         from PIL import Image
         from io import BytesIO
     except ImportError:
-        print(f"[icon] ERROR: Pillow not installed, cannot extract icon for {package}")
+        print(f"[icon] ERROR: Pillow not installed, cannot extract icon for {package}", flush=True)
         return False, "Pillow not installed"
 
-    print(f"[icon] Extracting icon from {os.path.basename(apk_path)} for {package}")
+    print(f"[icon] Extracting icon from {os.path.basename(apk_path)} for {package}", flush=True)
 
-    # Density preference order (highest first)
-    density_order = ["xxxhdpi", "xxhdpi", "xhdpi", "hdpi", "mdpi", "ldpi"]
-
+    # Get version code using aapt
     try:
-        from androguard.core.apk import APK
-        apk_obj = APK(apk_path)
-        version_code = int(apk_obj.get_androidversion_code() or 1)
-        icon_ref = apk_obj.get_app_icon()
-        print(f"[icon] Icon reference from manifest: {icon_ref}")
-    except Exception as e:
-        print(f"[icon] Failed to parse APK with androguard: {e}")
-        return False, f"Failed to parse APK: {e}"
+        result = subprocess.run(
+            ["aapt", "dump", "badging", apk_path],
+            capture_output=True, text=True, timeout=30
+        )
+        badging_output = result.stdout
 
-    if not icon_ref:
-        print(f"[icon] No icon reference in manifest for {package}")
-        return False, "No icon reference in manifest"
+        # Extract version code
+        version_match = re.search(r"versionCode='(\d+)'", badging_output)
+        version_code = int(version_match.group(1)) if version_match else 1
+
+        # Extract icon path (e.g., "application-icon-480:'res/BW.xml'")
+        icon_match = re.search(r"application-icon-\d+:'([^']+)'", badging_output)
+        if not icon_match:
+            # Try the application line
+            icon_match = re.search(r"application:.*icon='([^']+)'", badging_output)
+
+        if not icon_match:
+            print(f"[icon] No icon found in aapt badging output for {package}", flush=True)
+            return False, "No icon in manifest"
+
+        icon_path = icon_match.group(1)
+        print(f"[icon] Icon path from aapt: {icon_path}", flush=True)
+
+    except subprocess.TimeoutExpired:
+        print(f"[icon] aapt timed out for {package}", flush=True)
+        return False, "aapt timeout"
+    except Exception as e:
+        print(f"[icon] aapt failed for {package}: {e}", flush=True)
+        return False, f"aapt failed: {e}"
 
     try:
         with zipfile.ZipFile(apk_path, 'r') as zf:
-            all_files = zf.namelist()
-
-            # Check if icon_ref points to a PNG directly
-            if icon_ref in all_files:
+            # Check if icon is a direct PNG/WEBP
+            if icon_path.endswith(('.png', '.webp')):
                 try:
-                    icon_data = zf.read(icon_ref)
-                    img = Image.open(BytesIO(icon_data))
-                    if img.format == 'PNG' or img.format == 'WEBP':
-                        print(f"[icon] Found direct PNG/WEBP icon: {icon_ref}")
-                        return _save_extracted_icon(img, package, version_code)
+                    icon_data = zf.read(icon_path)
+                    img = Image.open(BytesIO(icon_data)).convert("RGBA")
+                    print(f"[icon] Found direct image icon: {icon_path}", flush=True)
+                    return _save_extracted_icon(img, package, version_code)
                 except Exception as e:
-                    print(f"[icon] Direct icon read failed: {e}, trying adaptive...")
+                    print(f"[icon] Failed to read direct icon: {e}", flush=True)
 
-            # Look for adaptive icon - find the XML or foreground PNG
-            icon_name = os.path.splitext(os.path.basename(icon_ref))[0]  # e.g., "ic_launcher"
-            print(f"[icon] Looking for adaptive icon with name: {icon_name}")
+            # Icon is XML (adaptive icon) - need to find foreground/background
+            if icon_path.endswith('.xml'):
+                print(f"[icon] Adaptive icon detected, parsing XML...", flush=True)
+                fg_path, bg_path = _get_adaptive_icon_paths(apk_path, icon_path)
 
-            # First try: find foreground PNG directly (works for most adaptive icons)
-            foreground_patterns = [
-                f"{icon_name}_foreground",
-                f"{icon_name}foreground",
-                "ic_launcher_foreground",
-                "ic_launcher_round"
-            ]
+                if fg_path:
+                    print(f"[icon] Foreground: {fg_path}, Background: {bg_path}", flush=True)
+                    try:
+                        fg_data = zf.read(fg_path)
+                        fg_img = Image.open(BytesIO(fg_data)).convert("RGBA")
 
-            for density in density_order:
-                for pattern in foreground_patterns:
-                    for ext in [".png", ".webp"]:
-                        candidates = [f for f in all_files if density in f and pattern in f.lower() and f.endswith(ext)]
-                        if candidates:
+                        if bg_path:
                             try:
-                                fg_data = zf.read(candidates[0])
-                                fg_img = Image.open(BytesIO(fg_data)).convert("RGBA")
-                                print(f"[icon] Found foreground: {candidates[0]}")
-
-                                # Try to find background too
-                                bg_pattern = pattern.replace("foreground", "background")
-                                bg_candidates = [f for f in all_files if density in f and bg_pattern in f.lower() and f.endswith(ext)]
-
-                                if bg_candidates:
-                                    try:
-                                        bg_data = zf.read(bg_candidates[0])
-                                        bg_img = Image.open(BytesIO(bg_data)).convert("RGBA")
-                                        print(f"[icon] Found background: {bg_candidates[0]}")
-                                        # Resize to match if needed
-                                        if bg_img.size != fg_img.size:
-                                            bg_img = bg_img.resize(fg_img.size, Image.Resampling.LANCZOS)
-                                        # Composite
-                                        result = Image.alpha_composite(bg_img, fg_img)
-                                        return _save_extracted_icon(result, package, version_code)
-                                    except:
-                                        pass
-
-                                # No background, use foreground with white background
-                                bg_img = Image.new("RGBA", fg_img.size, (255, 255, 255, 255))
+                                bg_data = zf.read(bg_path)
+                                bg_img = Image.open(BytesIO(bg_data)).convert("RGBA")
+                                # Resize to match if needed
+                                if bg_img.size != fg_img.size:
+                                    bg_img = bg_img.resize(fg_img.size, Image.Resampling.LANCZOS)
                                 result = Image.alpha_composite(bg_img, fg_img)
                                 return _save_extracted_icon(result, package, version_code)
                             except Exception as e:
-                                print(f"[icon] Failed to process {candidates[0]}: {e}")
-                                continue
+                                print(f"[icon] Background composite failed: {e}, using white bg", flush=True)
 
-            # Fallback: look for any ic_launcher PNG
-            for density in density_order:
-                for name in ["ic_launcher", "ic_launcher_round", "icon"]:
-                    for ext in [".png", ".webp"]:
-                        candidates = [f for f in all_files if density in f and f.endswith(f"{name}{ext}")]
-                        if candidates:
-                            try:
-                                icon_data = zf.read(candidates[0])
-                                img = Image.open(BytesIO(icon_data)).convert("RGBA")
-                                print(f"[icon] Using fallback icon: {candidates[0]}")
-                                return _save_extracted_icon(img, package, version_code)
-                            except:
-                                continue
+                        # No background or failed, use white background
+                        bg_img = Image.new("RGBA", fg_img.size, (255, 255, 255, 255))
+                        result = Image.alpha_composite(bg_img, fg_img)
+                        return _save_extracted_icon(result, package, version_code)
 
-            print(f"[icon] No extractable icon found for {package}")
+                    except Exception as e:
+                        print(f"[icon] Failed to process foreground: {e}", flush=True)
+
+            print(f"[icon] No extractable icon found for {package}", flush=True)
             return False, "No extractable icon found"
 
     except zipfile.BadZipFile:
-        print(f"[icon] Invalid APK (not a valid ZIP): {apk_path}")
+        print(f"[icon] Invalid APK (not a valid ZIP): {apk_path}", flush=True)
         return False, "Invalid APK (not a valid ZIP)"
     except Exception as e:
-        print(f"[icon] Error extracting icon for {package}: {e}")
+        print(f"[icon] Error extracting icon for {package}: {e}", flush=True)
         return False, f"Error extracting icon: {e}"
+
+
+def _get_adaptive_icon_paths(apk_path, icon_xml_path):
+    """
+    Parse adaptive icon XML and find actual PNG paths using aapt.
+    Returns (foreground_path, background_path) or (None, None).
+    """
+    import subprocess
+    import re
+
+    try:
+        # Get resource IDs from the adaptive icon XML
+        result = subprocess.run(
+            ["aapt", "dump", "xmltree", apk_path, icon_xml_path],
+            capture_output=True, text=True, timeout=30
+        )
+
+        # Parse for foreground and background resource IDs
+        # E.g.: A: android:drawable(0x01010199)=@0x7f0e0004
+        fg_id_match = re.search(r'E: foreground.*?android:drawable.*?=@(0x[0-9a-fA-F]+)', result.stdout, re.DOTALL)
+        bg_id_match = re.search(r'E: background.*?android:drawable.*?=@(0x[0-9a-fA-F]+)', result.stdout, re.DOTALL)
+
+        fg_id = fg_id_match.group(1) if fg_id_match else None
+        bg_id = bg_id_match.group(1) if bg_id_match else None
+
+        print(f"[icon] Resource IDs - fg: {fg_id}, bg: {bg_id}", flush=True)
+
+        if not fg_id:
+            return None, None
+
+        # Get resource dump to find actual file paths
+        result = subprocess.run(
+            ["aapt", "dump", "--values", "resources", apk_path],
+            capture_output=True, text=True, timeout=60
+        )
+
+        # Find all file paths for each resource ID, pick the largest (highest density)
+        fg_path = _find_best_resource_path(result.stdout, fg_id)
+        bg_path = _find_best_resource_path(result.stdout, bg_id) if bg_id else None
+
+        return fg_path, bg_path
+
+    except Exception as e:
+        print(f"[icon] Failed to parse adaptive icon: {e}", flush=True)
+        return None, None
+
+
+def _find_best_resource_path(resources_output, resource_id):
+    """
+    Find the best (highest density) file path for a resource ID.
+    Returns the path string or None.
+    """
+    import re
+
+    if not resource_id:
+        return None
+
+    # Find all occurrences of this resource ID and their file paths
+    # Pattern: resource 0x7f0e0004 ... (string8) "res/Lf.png"
+    pattern = rf'resource {resource_id}.*?\(string8\) "([^"]+\.(?:png|webp))"'
+    matches = re.findall(pattern, resources_output, re.DOTALL)
+
+    if not matches:
+        # Try without the extension filter for XML resources that might reference other XMLs
+        pattern = rf'resource {resource_id}.*?\(string8\) "([^"]+)"'
+        matches = re.findall(pattern, resources_output, re.DOTALL)
+
+    if not matches:
+        return None
+
+    # Return the last match (usually highest density) or we could check file sizes
+    # The resources are typically listed in density order (mdpi, hdpi, xhdpi, xxhdpi, xxxhdpi)
+    return matches[-1] if matches else None
 
 
 def _save_extracted_icon(img, package, version_code):
@@ -309,7 +364,7 @@ def _save_extracted_icon(img, package, version_code):
     icon_path = os.path.join(icons_dir, icon_filename)
     img.save(icon_path, "PNG")
 
-    print(f"[icon] Saved icon to {icon_path}")
+    print(f"[icon] Saved icon to {icon_path}", flush=True)
     return True, icon_path
 
 
