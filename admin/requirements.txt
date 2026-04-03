@@ -3,5 +3,6 @@ requests>=2.31.0
 PyYAML>=6.0
 gunicorn>=21.0.0
 beautifulsoup4>=4.12.0
+Pillow>=10.0.0
 # fdroidserver via pip (not apt) for androguard 4.x compatibility
 fdroidserver>=2.4.0

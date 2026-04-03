@@ -172,6 +172,100 @@ def get_package_from_apk(apk_path):
     return None
 
 
+def extract_icon_from_apk(apk_path, package):
+    """
+    Extract icon from APK by unzipping and finding the best PNG icon.
+    APKs are just ZIP files - no need for apktool.
+    Returns (success, icon_path or error_message)
+    """
+    import zipfile
+    try:
+        from PIL import Image
+        from io import BytesIO
+    except ImportError:
+        return False, "Pillow not installed"
+
+    # Density preference order (highest first)
+    density_order = ["xxxhdpi", "xxhdpi", "xhdpi", "hdpi", "mdpi", "ldpi"]
+    icon_names = ["ic_launcher", "ic_launcher_round", "ic_launcher_foreground", "icon"]
+
+    print(f"[icon] Extracting icon from {os.path.basename(apk_path)} for {package}")
+
+    try:
+        with zipfile.ZipFile(apk_path, 'r') as apk:
+            # Get list of files in res/ folder
+            res_files = [f for f in apk.namelist() if f.startswith("res/")]
+
+            # Find icon candidates - look for PNG files with icon names
+            icon_candidates = []
+            for f in res_files:
+                fname = os.path.basename(f).lower()
+                if not fname.endswith(".png"):
+                    continue
+                name_without_ext = fname[:-4]
+                if any(icon_name in name_without_ext for icon_name in icon_names):
+                    # Determine density from path
+                    density = "mdpi"  # default
+                    for d in density_order:
+                        if d in f:
+                            density = d
+                            break
+                    icon_candidates.append((f, density))
+
+            if not icon_candidates:
+                print(f"[icon] No icon candidates found in {apk_path}")
+                return False, "No icon found in APK"
+
+            # Sort by density (highest first)
+            def density_sort_key(item):
+                try:
+                    return density_order.index(item[1])
+                except ValueError:
+                    return len(density_order)
+
+            icon_candidates.sort(key=density_sort_key)
+
+            # Try each candidate until one works
+            for icon_file, density in icon_candidates:
+                try:
+                    icon_data = apk.read(icon_file)
+                    img = Image.open(BytesIO(icon_data))
+
+                    # Convert to RGBA and resize
+                    img = img.convert("RGBA")
+                    img = img.resize((512, 512), Image.Resampling.LANCZOS)
+
+                    # Save to F-Droid icons location
+                    icons_dir = os.path.join(REPO_DIR, "icons")
+                    os.makedirs(icons_dir, exist_ok=True)
+
+                    # Get version code for proper F-Droid naming
+                    try:
+                        from androguard.core.apk import APK
+                        apk_info = APK(apk_path)
+                        version_code = int(apk_info.get_androidversion_code() or 1)
+                    except:
+                        version_code = 1
+
+                    icon_filename = f"{package}.{version_code}.png"
+                    icon_path = os.path.join(icons_dir, icon_filename)
+                    img.save(icon_path, "PNG")
+
+                    print(f"[icon] Saved icon from {icon_file} ({density}) to {icon_path}")
+                    return True, icon_path
+
+                except Exception as e:
+                    print(f"[icon] Failed to process {icon_file}: {e}")
+                    continue
+
+            return False, "Could not process any icon candidates"
+
+    except zipfile.BadZipFile:
+        return False, "Invalid APK (not a valid ZIP)"
+    except Exception as e:
+        return False, f"Error extracting icon: {e}"
+
+
 def validate_apk_for_fdroid(apk_path):
     """
     Pre-validate APK to ensure it won't crash fdroid update.
@@ -868,6 +962,11 @@ def get_app_info(package):
             version_code = int(apk.get_androidversion_code() or 1)
             icon_filename = f"{package}.{version_code}.png"
             icon_path = os.path.join(REPO_DIR, "icons", icon_filename)
+
+            # Auto-extract icon if missing
+            if not os.path.exists(icon_path):
+                extract_icon_from_apk(apk_files[0], package)
+
             if os.path.exists(icon_path):
                 public_url = os.environ.get("PUBLIC_URL", "https://store.edutab.eu")
                 info["icon"] = f"{public_url}/repo/icons/{icon_filename}"
@@ -1908,6 +2007,13 @@ def import_apk_to_repo(apk_path, scan_virustotal=True):
     if os.path.exists(dest_path):
         os.remove(dest_path)
     shutil.move(apk_path, dest_path)
+
+    # Extract icon from APK (adaptive icons need special handling)
+    icon_success, icon_result = extract_icon_from_apk(dest_path, package)
+    if icon_success:
+        print(f"[import] Icon extracted: {icon_result}")
+    else:
+        print(f"[import] Icon extraction failed: {icon_result}")
 
     # Run fdroid update
     fdroid_success, fdroid_output = run_fdroid_update()
