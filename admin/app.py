@@ -597,6 +597,16 @@ def run_fdroid_update(clean=False):
             return False, output + "\nWARNING: No index files generated"
 
         print(f"[fdroid] Update successful (index-v1: {index_v1}, index-v2: {index_v2})")
+
+        # Extract icons for all APKs when clean mode (cache cleared)
+        if clean:
+            print("[fdroid] Extracting icons for all APKs...")
+            apk_files = glob.glob(os.path.join(REPO_DIR, "*.apk"))
+            for apk_path in apk_files:
+                package = get_package_from_apk(apk_path)
+                if package:
+                    extract_icon_from_apk(apk_path, package)
+
         return True, output
     except subprocess.TimeoutExpired:
         print("[fdroid] Update TIMEOUT after 5 minutes")
