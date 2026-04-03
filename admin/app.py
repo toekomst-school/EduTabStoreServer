@@ -1847,9 +1847,14 @@ def import_apk_to_repo(apk_path, scan_virustotal=True):
     # Calculate SHA256
     sha256 = get_file_sha256(apk_path)
 
-    # Move to repo
-    filename = os.path.basename(apk_path)
+    # Move to repo with package-based filename to avoid conflicts
+    original_filename = os.path.basename(apk_path)
+    ext = os.path.splitext(original_filename)[1]  # .apk
+    filename = f"{package}{ext}"
     dest_path = os.path.join(REPO_DIR, filename)
+    # Remove existing APK for this package if present
+    if os.path.exists(dest_path):
+        os.remove(dest_path)
     shutil.move(apk_path, dest_path)
 
     # Run fdroid update
