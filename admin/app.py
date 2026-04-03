@@ -174,11 +174,12 @@ def get_package_from_apk(apk_path):
 
 def extract_icon_from_apk(apk_path, package):
     """
-    Extract icon from APK by unzipping and finding the best PNG icon.
-    APKs are just ZIP files - no need for apktool.
+    Extract icon from APK, handling both regular and adaptive icons.
+    Uses androguard to find icon path, then extracts/composites as needed.
     Returns (success, icon_path or error_message)
     """
     import zipfile
+    import xml.etree.ElementTree as ET
     try:
         from PIL import Image
         from io import BytesIO
@@ -186,81 +187,104 @@ def extract_icon_from_apk(apk_path, package):
         print(f"[icon] ERROR: Pillow not installed, cannot extract icon for {package}")
         return False, "Pillow not installed"
 
-    # Density preference order (highest first)
-    density_order = ["xxxhdpi", "xxhdpi", "xhdpi", "hdpi", "mdpi", "ldpi"]
-    icon_names = ["ic_launcher", "ic_launcher_round", "ic_launcher_foreground", "icon"]
-
     print(f"[icon] Extracting icon from {os.path.basename(apk_path)} for {package}")
 
+    # Density preference order (highest first)
+    density_order = ["xxxhdpi", "xxhdpi", "xhdpi", "hdpi", "mdpi", "ldpi"]
+
     try:
-        with zipfile.ZipFile(apk_path, 'r') as apk:
-            # Get list of files in res/ folder
-            res_files = [f for f in apk.namelist() if f.startswith("res/")]
+        from androguard.core.apk import APK
+        apk_obj = APK(apk_path)
+        version_code = int(apk_obj.get_androidversion_code() or 1)
+        icon_ref = apk_obj.get_app_icon()
+        print(f"[icon] Icon reference from manifest: {icon_ref}")
+    except Exception as e:
+        print(f"[icon] Failed to parse APK with androguard: {e}")
+        return False, f"Failed to parse APK: {e}"
 
-            # Find icon candidates - look for PNG files with icon names
-            icon_candidates = []
-            for f in res_files:
-                fname = os.path.basename(f).lower()
-                if not fname.endswith(".png"):
-                    continue
-                name_without_ext = fname[:-4]
-                if any(icon_name in name_without_ext for icon_name in icon_names):
-                    # Determine density from path
-                    density = "mdpi"  # default
-                    for d in density_order:
-                        if d in f:
-                            density = d
-                            break
-                    icon_candidates.append((f, density))
+    if not icon_ref:
+        print(f"[icon] No icon reference in manifest for {package}")
+        return False, "No icon reference in manifest"
 
-            if not icon_candidates:
-                print(f"[icon] No icon candidates found in {apk_path}")
-                return False, "No icon found in APK"
+    try:
+        with zipfile.ZipFile(apk_path, 'r') as zf:
+            all_files = zf.namelist()
 
-            # Sort by density (highest first)
-            def density_sort_key(item):
+            # Check if icon_ref points to a PNG directly
+            if icon_ref in all_files:
                 try:
-                    return density_order.index(item[1])
-                except ValueError:
-                    return len(density_order)
-
-            icon_candidates.sort(key=density_sort_key)
-
-            # Try each candidate until one works
-            for icon_file, density in icon_candidates:
-                try:
-                    icon_data = apk.read(icon_file)
+                    icon_data = zf.read(icon_ref)
                     img = Image.open(BytesIO(icon_data))
-
-                    # Convert to RGBA and resize
-                    img = img.convert("RGBA")
-                    img = img.resize((512, 512), Image.Resampling.LANCZOS)
-
-                    # Save to F-Droid icons location
-                    icons_dir = os.path.join(REPO_DIR, "icons")
-                    os.makedirs(icons_dir, exist_ok=True)
-
-                    # Get version code for proper F-Droid naming
-                    try:
-                        from androguard.core.apk import APK
-                        apk_info = APK(apk_path)
-                        version_code = int(apk_info.get_androidversion_code() or 1)
-                    except:
-                        version_code = 1
-
-                    icon_filename = f"{package}.{version_code}.png"
-                    icon_path = os.path.join(icons_dir, icon_filename)
-                    img.save(icon_path, "PNG")
-
-                    print(f"[icon] Saved icon from {icon_file} ({density}) to {icon_path}")
-                    return True, icon_path
-
+                    if img.format == 'PNG' or img.format == 'WEBP':
+                        print(f"[icon] Found direct PNG/WEBP icon: {icon_ref}")
+                        return _save_extracted_icon(img, package, version_code)
                 except Exception as e:
-                    print(f"[icon] Failed to process {icon_file}: {e}")
-                    continue
+                    print(f"[icon] Direct icon read failed: {e}, trying adaptive...")
 
-            print(f"[icon] Could not process any icon candidates for {package}")
-            return False, "Could not process any icon candidates"
+            # Look for adaptive icon - find the XML or foreground PNG
+            icon_name = os.path.splitext(os.path.basename(icon_ref))[0]  # e.g., "ic_launcher"
+            print(f"[icon] Looking for adaptive icon with name: {icon_name}")
+
+            # First try: find foreground PNG directly (works for most adaptive icons)
+            foreground_patterns = [
+                f"{icon_name}_foreground",
+                f"{icon_name}foreground",
+                "ic_launcher_foreground",
+                "ic_launcher_round"
+            ]
+
+            for density in density_order:
+                for pattern in foreground_patterns:
+                    for ext in [".png", ".webp"]:
+                        candidates = [f for f in all_files if density in f and pattern in f.lower() and f.endswith(ext)]
+                        if candidates:
+                            try:
+                                fg_data = zf.read(candidates[0])
+                                fg_img = Image.open(BytesIO(fg_data)).convert("RGBA")
+                                print(f"[icon] Found foreground: {candidates[0]}")
+
+                                # Try to find background too
+                                bg_pattern = pattern.replace("foreground", "background")
+                                bg_candidates = [f for f in all_files if density in f and bg_pattern in f.lower() and f.endswith(ext)]
+
+                                if bg_candidates:
+                                    try:
+                                        bg_data = zf.read(bg_candidates[0])
+                                        bg_img = Image.open(BytesIO(bg_data)).convert("RGBA")
+                                        print(f"[icon] Found background: {bg_candidates[0]}")
+                                        # Resize to match if needed
+                                        if bg_img.size != fg_img.size:
+                                            bg_img = bg_img.resize(fg_img.size, Image.Resampling.LANCZOS)
+                                        # Composite
+                                        result = Image.alpha_composite(bg_img, fg_img)
+                                        return _save_extracted_icon(result, package, version_code)
+                                    except:
+                                        pass
+
+                                # No background, use foreground with white background
+                                bg_img = Image.new("RGBA", fg_img.size, (255, 255, 255, 255))
+                                result = Image.alpha_composite(bg_img, fg_img)
+                                return _save_extracted_icon(result, package, version_code)
+                            except Exception as e:
+                                print(f"[icon] Failed to process {candidates[0]}: {e}")
+                                continue
+
+            # Fallback: look for any ic_launcher PNG
+            for density in density_order:
+                for name in ["ic_launcher", "ic_launcher_round", "icon"]:
+                    for ext in [".png", ".webp"]:
+                        candidates = [f for f in all_files if density in f and f.endswith(f"{name}{ext}")]
+                        if candidates:
+                            try:
+                                icon_data = zf.read(candidates[0])
+                                img = Image.open(BytesIO(icon_data)).convert("RGBA")
+                                print(f"[icon] Using fallback icon: {candidates[0]}")
+                                return _save_extracted_icon(img, package, version_code)
+                            except:
+                                continue
+
+            print(f"[icon] No extractable icon found for {package}")
+            return False, "No extractable icon found"
 
     except zipfile.BadZipFile:
         print(f"[icon] Invalid APK (not a valid ZIP): {apk_path}")
@@ -268,6 +292,25 @@ def extract_icon_from_apk(apk_path, package):
     except Exception as e:
         print(f"[icon] Error extracting icon for {package}: {e}")
         return False, f"Error extracting icon: {e}"
+
+
+def _save_extracted_icon(img, package, version_code):
+    """Save extracted icon to F-Droid icons location."""
+    from PIL import Image
+
+    # Resize to 512x512
+    img = img.resize((512, 512), Image.Resampling.LANCZOS)
+
+    # Save to F-Droid icons location
+    icons_dir = os.path.join(REPO_DIR, "icons")
+    os.makedirs(icons_dir, exist_ok=True)
+
+    icon_filename = f"{package}.{version_code}.png"
+    icon_path = os.path.join(icons_dir, icon_filename)
+    img.save(icon_path, "PNG")
+
+    print(f"[icon] Saved icon to {icon_path}")
+    return True, icon_path
 
 
 def validate_apk_for_fdroid(apk_path):
