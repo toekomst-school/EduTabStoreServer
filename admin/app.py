@@ -2338,6 +2338,76 @@ def fetch_pwa_manifest(url):
         return None, None, f"Error fetching manifest: {str(e)}"
 
 
+def save_pwa_icon_from_manifest(manifest, manifest_url, package_id, version_code):
+    """
+    Download and save the PWA icon from manifest to F-Droid icons directory.
+    Returns (success, icon_path or error_message)
+    """
+    from urllib.parse import urljoin
+    try:
+        from PIL import Image
+        from io import BytesIO
+    except ImportError:
+        print(f"[pwa-icon] Pillow not installed", flush=True)
+        return False, "Pillow not installed"
+
+    icons = manifest.get("icons", [])
+    if not icons:
+        print(f"[pwa-icon] No icons in manifest for {package_id}", flush=True)
+        return False, "No icons in manifest"
+
+    # Sort icons by size (prefer largest)
+    def get_icon_size(icon):
+        sizes = icon.get("sizes", "0x0")
+        if sizes == "any":
+            return 512
+        try:
+            w, h = sizes.split("x")
+            return int(w)
+        except:
+            return 0
+
+    icons_sorted = sorted(icons, key=get_icon_size, reverse=True)
+
+    # Try to download the best icon
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36"
+    }
+
+    for icon_entry in icons_sorted:
+        icon_src = icon_entry.get("src")
+        if not icon_src:
+            continue
+
+        icon_url = urljoin(manifest_url, icon_src)
+        print(f"[pwa-icon] Trying icon: {icon_url}", flush=True)
+
+        try:
+            response = requests.get(icon_url, headers=headers, timeout=15)
+            response.raise_for_status()
+
+            img = Image.open(BytesIO(response.content)).convert("RGBA")
+            img = img.resize((512, 512), Image.Resampling.LANCZOS)
+
+            # Save to F-Droid icons location
+            icons_dir = os.path.join(REPO_DIR, "icons")
+            os.makedirs(icons_dir, exist_ok=True)
+
+            icon_filename = f"{package_id}.{version_code}.png"
+            icon_path = os.path.join(icons_dir, icon_filename)
+            img.save(icon_path, "PNG")
+
+            print(f"[pwa-icon] Saved icon to {icon_path}", flush=True)
+            return True, icon_path
+
+        except Exception as e:
+            print(f"[pwa-icon] Failed to download {icon_url}: {e}", flush=True)
+            continue
+
+    print(f"[pwa-icon] No downloadable icons found for {package_id}", flush=True)
+    return False, "No downloadable icons found"
+
+
 def generate_package_id(name, url):
     """Generate a valid Android package ID from PWA name and URL"""
     import re
@@ -2715,7 +2785,42 @@ def api_build_pwa():
             run_fdroid_update()
 
         except Exception as e:
-            print(f"[pwa] Warning: Failed to update metadata: {e}")
+            print(f"[pwa] Warning: Failed to update metadata: {e}", flush=True)
+
+        # Save PWA icon from manifest (much simpler than extracting from APK)
+        try:
+            # Get version code from APK
+            import subprocess
+            import re
+            apk_in_repo = os.path.join(REPO_DIR, f"{package_id}.apk")
+            aapt_result = subprocess.run(
+                ["aapt", "dump", "badging", apk_in_repo],
+                capture_output=True, text=True, timeout=30
+            )
+            version_match = re.search(r"versionCode='(\d+)'", aapt_result.stdout)
+            version_code = int(version_match.group(1)) if version_match else 1
+
+            # Try to save icon from manifest or base64
+            if data.get("icon"):
+                # Manual mode with base64 icon
+                import base64
+                from PIL import Image
+                from io import BytesIO
+                icon_data = base64.b64decode(data["icon"])
+                img = Image.open(BytesIO(icon_data)).convert("RGBA")
+                img = img.resize((512, 512), Image.Resampling.LANCZOS)
+                icons_dir = os.path.join(REPO_DIR, "icons")
+                os.makedirs(icons_dir, exist_ok=True)
+                icon_path = os.path.join(icons_dir, f"{package_id}.{version_code}.png")
+                img.save(icon_path, "PNG")
+                print(f"[pwa-icon] Saved base64 icon to {icon_path}", flush=True)
+            elif manifest.get("icons"):
+                # Use manifest icons
+                save_pwa_icon_from_manifest(manifest, manifest_url, package_id, version_code)
+            else:
+                print(f"[pwa-icon] No icon source available for {package_id}", flush=True)
+        except Exception as e:
+            print(f"[pwa] Warning: Failed to save PWA icon: {e}", flush=True)
 
         result["pwa_info"] = {
             "name": app_name,
